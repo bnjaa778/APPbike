@@ -4,16 +4,45 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.DirectionsBike
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Map
+import androidx.compose.material.icons.outlined.PersonOutline
+import androidx.compose.material.icons.outlined.Storefront
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.appbike.ui.theme.APPbikeTheme
 
@@ -23,21 +52,28 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         setContent {
-            APPbikeTheme {
+            APPbikeTheme(dynamicColor = false) {
                 AppBikeApp()
             }
         }
     }
 }
 
+private data class MainDestination(
+    val label: String,
+    val screen: AppScreen,
+    val icon: ImageVector
+)
+
 @Composable
 fun AppBikeApp() {
-    var currentScreen by remember { mutableStateOf(AppScreen.HOME) }
+    var currentScreen by remember { mutableStateOf(AppScreen.ROUTES) }
+    val context = LocalContext.current
+    var accountSession by remember { mutableStateOf(AccountStore.loadSession(context)) }
 
     val bikes = remember { mutableStateListOf<Bike>() }
     val reminders = remember { mutableStateListOf<MaintenanceReminder>() }
     val bookings = remember { mutableStateListOf<ServiceBooking>() }
-
     val products = remember {
         mutableStateListOf(
             ProductPublication(
@@ -60,7 +96,6 @@ fun AppBikeApp() {
             )
         )
     }
-
     val routes = remember {
         mutableStateListOf(
             RoutePost(
@@ -75,7 +110,6 @@ fun AppBikeApp() {
             )
         )
     }
-
     val meetups = remember {
         mutableStateListOf(
             RideMeetup(
@@ -91,7 +125,6 @@ fun AppBikeApp() {
             )
         )
     }
-
     val messages = remember {
         mutableStateListOf(
             ChatMessage(
@@ -100,90 +133,141 @@ fun AppBikeApp() {
             )
         )
     }
-
     val platforms = remember {
         mutableStateListOf(
-            SyncPlatform("Strava", "Sincroniza actividades, rutas y entrenamientos.", false),
-            SyncPlatform("Garmin", "Conecta relojes, ciclocomputadores y monitores deportivos.", false),
-            SyncPlatform("Wahoo", "Importa datos de entrenamiento y sensores.", false)
+            SyncPlatform("Strava", "Actividades, rutas y entrenamientos.", false),
+            SyncPlatform("Garmin", "Relojes, ciclocomputadores y sensores.", false),
+            SyncPlatform("Wahoo", "Entrenamientos y dispositivos deportivos.", false)
         )
     }
 
-    when (currentScreen) {
-        AppScreen.HOME -> HomeScreen { currentScreen = it }
-
-        AppScreen.BIKES -> BikesScreen(
-            bikes = bikes,
-            reminders = reminders,
-            bookings = bookings,
-            onBack = { currentScreen = AppScreen.HOME }
+    val destinations = remember {
+        listOf(
+            MainDestination("Mapas", AppScreen.ROUTES, Icons.Outlined.Map),
+            MainDestination(
+                "Bicicletas",
+                AppScreen.BIKES,
+                Icons.AutoMirrored.Outlined.DirectionsBike
+            ),
+            MainDestination("Marketplace", AppScreen.MARKETPLACE, Icons.Outlined.Storefront),
+            MainDestination("Chat", AppScreen.CHAT, Icons.Outlined.ChatBubbleOutline)
         )
+    }
 
-        AppScreen.MARKETPLACE -> MarketplaceScreen(
-            products = products,
-            onCreatePublication = { currentScreen = AppScreen.CREATE_PUBLICATION },
-            onBack = { currentScreen = AppScreen.HOME }
-        )
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            AppTopBar(
+                session = accountSession,
+                accountSelected = currentScreen == AppScreen.ACCOUNT,
+                onAccountClick = { currentScreen = AppScreen.ACCOUNT }
+            )
+        },
+        bottomBar = {
+            AppBottomBar(
+                destinations = destinations,
+                currentScreen = currentScreen,
+                unreadMessages = 0,
+                onNavigate = { currentScreen = it }
+            )
+        }
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
+            when (currentScreen) {
+                AppScreen.ACCOUNT, AppScreen.SYNC -> AccountScreen(
+                    session = accountSession,
+                    platforms = platforms,
+                    onLogin = { session ->
+                        AccountStore.saveSession(context, session)
+                        accountSession = session
+                    },
+                    onLogout = {
+                        AccountStore.clearSession(context)
+                        accountSession = null
+                        bikes.clear()
+                        reminders.clear()
+                        bookings.clear()
+                    }
+                )
 
-        AppScreen.CREATE_PUBLICATION -> CreatePublicationScreen(
-            onPublish = {
-                products.add(0, RemoteConnections.publishProduct(it))
-                currentScreen = AppScreen.MARKETPLACE
-            },
-            onBack = { currentScreen = AppScreen.MARKETPLACE }
-        )
+                AppScreen.BIKES -> BikesScreen(
+                    account = accountSession,
+                    bikes = bikes,
+                    reminders = reminders,
+                    bookings = bookings,
+                    onOpenAccount = { currentScreen = AppScreen.ACCOUNT },
+                    onBack = null
+                )
 
-        AppScreen.ROUTES -> RoutesScreen(
-            routes = routes,
-            meetups = meetups,
-            onBack = { currentScreen = AppScreen.HOME }
-        )
+                AppScreen.MARKETPLACE, AppScreen.CREATE_PUBLICATION ->
+                    MarketplaceScreen(accountSession)
 
-        AppScreen.CHAT -> ChatScreen(
-            messages = messages,
-            onBack = { currentScreen = AppScreen.HOME }
-        )
+                AppScreen.ROUTES, AppScreen.HOME -> RoutesScreen(accountSession)
 
-        AppScreen.SYNC -> SyncScreen(
-            platforms = platforms,
-            onBack = { currentScreen = AppScreen.HOME }
-        )
+                AppScreen.CHAT -> ChatScreen(accountSession)
+            }
+        }
     }
 }
 
 @Composable
-fun HomeScreen(onNavigate: (AppScreen) -> Unit) {
-    val features = listOf(
-        AppFeature("Mis bicicletas", "Tus bicicletas, mantenciones y servicios en un solo lugar.", AppScreen.BIKES),
-        AppFeature("Marketplace", "Compra y vende productos con contenido multimedia.", AppScreen.MARKETPLACE),
-        AppFeature("Mapa y juntas rider", "Rutas seguras y organización de salidas grupales.", AppScreen.ROUTES),
-        AppFeature("Chat", "Comunicación con técnicos, talleres o vendedores.", AppScreen.CHAT),
-        AppFeature("Sincronización deportiva", "Conexión con Strava, Garmin y otros dispositivos.", AppScreen.SYNC)
-    )
-
-    Scaffold { innerPadding ->
-        Column(
+private fun AppTopBar(
+    session: AccountSession?,
+    accountSelected: Boolean,
+    onAccountClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.statusBarsPadding(),
+        color = MaterialTheme.colorScheme.background,
+        tonalElevation = 0.dp
+    ) {
+        Row(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("APPbike", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
-            Text("App integral para ciclistas", style = MaterialTheme.typography.titleMedium)
+            Column {
+                Text(
+                    text = "APPBIKE",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Black,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(1.dp))
+                Text(
+                    text = "Muévete. Conecta. Disfruta.",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
-            features.forEach { feature ->
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onNavigate(feature.screen) },
-                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(feature.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(feature.description)
+            Surface(
+                shape = MaterialTheme.shapes.large,
+                color = if (accountSelected) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainer
+                }
+            ) {
+                IconButton(onClick = onAccountClick) {
+                    BadgedBox(
+                        badge = {
+                            if (session != null) {
+                                Badge(containerColor = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.PersonOutline,
+                            contentDescription = "Cuenta y sincronización",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
                     }
                 }
             }
@@ -191,10 +275,51 @@ fun HomeScreen(onNavigate: (AppScreen) -> Unit) {
     }
 }
 
-@Preview(showBackground = true)
 @Composable
-fun AppBikePreview() {
-    APPbikeTheme {
-        AppBikeApp()
+private fun AppBottomBar(
+    destinations: List<MainDestination>,
+    currentScreen: AppScreen,
+    unreadMessages: Int,
+    onNavigate: (AppScreen) -> Unit
+) {
+    Surface(shadowElevation = 12.dp) {
+        NavigationBar(
+            modifier = Modifier.height(76.dp),
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
+            destinations.forEach { destination ->
+                val selected = currentScreen == destination.screen ||
+                    (destination.screen == AppScreen.MARKETPLACE &&
+                        currentScreen == AppScreen.CREATE_PUBLICATION)
+
+                NavigationBarItem(
+                    selected = selected,
+                    onClick = { onNavigate(destination.screen) },
+                    icon = {
+                        BadgedBox(
+                            badge = {
+                                if (destination.screen == AppScreen.CHAT && unreadMessages > 0) {
+                                    Badge { Text(unreadMessages.coerceAtMost(9).toString()) }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = destination.icon,
+                                contentDescription = destination.label,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    },
+                    label = { Text(destination.label, maxLines = 1) },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        selectedTextColor = MaterialTheme.colorScheme.primary,
+                        indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                )
+            }
+        }
     }
 }
