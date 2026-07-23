@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -23,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -38,6 +40,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.URL
+
+private const val BIKE_PHOTO_LOG_TAG = "APPbikePhotos"
 
 @Composable
 fun BikesScreen(
@@ -103,7 +107,7 @@ fun BikesScreen(
 
             if (account == null) {
                 Text(
-                    "Inicia sesión para ver únicamente las bicicletas asociadas a tu cuenta.",
+                    "Inicia sesión para ver tus bicicletas guardadas",
                     textAlign = TextAlign.Center
                 )
                 Button(onClick = onOpenAccount) {
@@ -555,7 +559,8 @@ private fun BikeImageFrame(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(if (loadedImage.hasTransparency) 4.dp else 10.dp),
-                contentScale = ContentScale.Fit
+                contentScale = ContentScale.Fit,
+                filterQuality = FilterQuality.High
             )
         } else {
             Text(
@@ -584,7 +589,8 @@ private fun decodeBikeImage(
     if (uri.scheme == "appbike-photo") {
         val photoId = uri.host.orEmpty()
         if (photoId.isBlank()) return null
-        return decodeBikeImageBytes(RemoteConnections.loadBikePhoto(photoId))
+        val bytes = RemoteConnections.loadBikePhoto(photoId)
+        return decodeBikeImageBytes(bytes, "api:$photoId")
     }
 
     val bounds = BitmapFactory.Options().apply {
@@ -594,6 +600,8 @@ private fun decodeBikeImage(
     openBikeImageStream(context, uri)?.use {
         BitmapFactory.decodeStream(it, null, bounds)
     }
+
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
 
     var sampleSize = 1
 
@@ -621,13 +629,27 @@ private fun decodeBikeImage(
         oriented
     }
 
+    logBikeImageDiagnostics(
+        source = uri.scheme.orEmpty().ifBlank { "local" },
+        sourceBytes = null,
+        sourceWidth = bounds.outWidth,
+        sourceHeight = bounds.outHeight,
+        sampleSize = sampleSize,
+        decoded = oriented,
+        displayed = displayBitmap,
+        hasTransparency = hasTransparency
+    )
+
     return ProcessedBikeImage(
         bitmap = displayBitmap,
         hasTransparency = hasTransparency
     )
 }
 
-private fun decodeBikeImageBytes(bytes: ByteArray): ProcessedBikeImage? {
+private fun decodeBikeImageBytes(
+    bytes: ByteArray,
+    source: String = "bytes"
+): ProcessedBikeImage? {
     val bounds = BitmapFactory.Options().apply {
         inJustDecodeBounds = true
     }
@@ -656,9 +678,44 @@ private fun decodeBikeImageBytes(bytes: ByteArray): ProcessedBikeImage? {
         decoded
     }
 
+    logBikeImageDiagnostics(
+        source = source,
+        sourceBytes = bytes.size,
+        sourceWidth = bounds.outWidth,
+        sourceHeight = bounds.outHeight,
+        sampleSize = sampleSize,
+        decoded = decoded,
+        displayed = displayBitmap,
+        hasTransparency = hasTransparency
+    )
+
     return ProcessedBikeImage(
         bitmap = displayBitmap,
         hasTransparency = hasTransparency
+    )
+}
+
+private fun logBikeImageDiagnostics(
+    source: String,
+    sourceBytes: Int?,
+    sourceWidth: Int,
+    sourceHeight: Int,
+    sampleSize: Int,
+    decoded: Bitmap,
+    displayed: Bitmap,
+    hasTransparency: Boolean
+) {
+    Log.d(
+        BIKE_PHOTO_LOG_TAG,
+        buildString {
+            append("source=").append(source)
+            if (sourceBytes != null) append(" bytes=").append(sourceBytes)
+            append(" source=").append(sourceWidth).append('x').append(sourceHeight)
+            append(" sample=").append(sampleSize)
+            append(" decoded=").append(decoded.width).append('x').append(decoded.height)
+            append(" displayed=").append(displayed.width).append('x').append(displayed.height)
+            append(" transparency=").append(hasTransparency)
+        }
     )
 }
 

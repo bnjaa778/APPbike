@@ -1,9 +1,20 @@
 package com.example.appbike
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +29,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.DirectionsBike
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.outlined.Storefront
@@ -33,6 +45,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -44,19 +57,106 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.example.appbike.ui.theme.APPbikeTheme
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
+    private val sportsOauthCallback = mutableStateOf<SportsOAuthCallback?>(null)
+    private val notificationChatTarget = mutableStateOf<NotificationChatTarget?>(null)
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {}
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        captureSportsOauth(intent)
+        captureNotificationTarget(intent)
+        ChatNotificationCenter.createChannel(this)
         enableEdgeToEdge()
 
         setContent {
             APPbikeTheme(dynamicColor = false) {
-                AppBikeApp()
+                AppBikeApp(
+                    oauthCallback = sportsOauthCallback.value,
+                    onOauthCallbackConsumed = { sportsOauthCallback.value = null },
+                    notificationTarget = notificationChatTarget.value,
+                    onNotificationTargetConsumed = { notificationChatTarget.value = null }
+                )
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        captureSportsOauth(intent)
+        captureNotificationTarget(intent)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        ChatNotificationCenter.appInForeground = true
+    }
+
+    override fun onStop() {
+        ChatNotificationCenter.appInForeground = false
+        super.onStop()
+    }
+
+    fun requestNotificationPermissionOnce() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+        ) return
+        val prefs = getSharedPreferences("appbike_permissions", MODE_PRIVATE)
+        if (prefs.getBoolean("notifications_listener_v2_asked", false)) return
+        prefs.edit().putBoolean("notifications_listener_v2_asked", true).apply()
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    private fun captureSportsOauth(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme != "appbike" || uri.host != "oauth") return
+        sportsOauthCallback.value = SportsOAuthCallback(
+            provider = uri.getQueryParameter("provider").orEmpty(),
+            code = uri.getQueryParameter("code").orEmpty(),
+            state = uri.getQueryParameter("state").orEmpty(),
+            error = uri.getQueryParameter("error").orEmpty()
+        )
+    }
+
+    private fun captureNotificationTarget(intent: Intent?) {
+        val chatId = intent?.getStringExtra(ChatNotificationCenter.EXTRA_CHAT_ID)
+            ?.takeIf(String::isNotBlank)
+            ?: return
+        val type = runCatching {
+            ChatType.valueOf(
+                intent.getStringExtra(ChatNotificationCenter.EXTRA_CHAT_TYPE).orEmpty()
+            )
+        }.getOrDefault(ChatType.SOCIAL)
+        notificationChatTarget.value = NotificationChatTarget(
+            chatId = chatId,
+            type = type,
+            title = intent.getStringExtra(ChatNotificationCenter.EXTRA_CHAT_TITLE).orEmpty()
+        )
+        intent.removeExtra(ChatNotificationCenter.EXTRA_CHAT_ID)
+    }
+}
+
+data class NotificationChatTarget(
+    val chatId: String,
+    val type: ChatType,
+    val title: String
+) {
+    fun asChat() = UserChat(
+        id = chatId,
+        type = type,
+        participants = emptyList(),
+        title = title
+    )
 }
 
 private data class MainDestination(
@@ -66,78 +166,30 @@ private data class MainDestination(
 )
 
 @Composable
-fun AppBikeApp() {
+fun AppBikeApp(
+    oauthCallback: SportsOAuthCallback? = null,
+    onOauthCallbackConsumed: () -> Unit = {},
+    notificationTarget: NotificationChatTarget? = null,
+    onNotificationTargetConsumed: () -> Unit = {}
+) {
     var currentScreen by remember { mutableStateOf(AppScreen.ROUTES) }
     val context = LocalContext.current
-    var accountSession by remember { mutableStateOf(AccountStore.loadSession(context)) }
+    var accountSession by remember {
+        mutableStateOf(AccountStore.loadSession(context).also(RemoteConnections::setSession))
+    }
 
     val bikes = remember { mutableStateListOf<Bike>() }
     val reminders = remember { mutableStateListOf<MaintenanceReminder>() }
     val bookings = remember { mutableStateListOf<ServiceBooking>() }
-    val products = remember {
-        mutableStateListOf(
-            ProductPublication(
-                title = "Casco MTB Specialized",
-                price = "$35.000",
-                category = "Seguridad",
-                condition = "Usado",
-                seller = "Carlos",
-                description = "Casco en buen estado, talla M.",
-                mediaDescription = "Foto del casco"
-            ),
-            ProductPublication(
-                title = "Bicicleta Trek Marlin 5",
-                price = "$480.000",
-                category = "Bicicletas",
-                condition = "Usado",
-                seller = "Daniela",
-                description = "Aro 29, frenos hidráulicos.",
-                mediaDescription = "Video demostrativo"
-            )
-        )
-    }
-    val routes = remember {
-        mutableStateListOf(
-            RoutePost(
-                name = "Ruta Costanera Segura",
-                zone = "Santiago Centro",
-                startPoint = "Metro Baquedano",
-                endPoint = "Parque Bicentenario",
-                distanceKm = "12",
-                estimatedTime = "45 min",
-                difficulty = "Media",
-                safetyNote = "Buena iluminación y ciclovía en gran parte del trayecto."
-            )
-        )
-    }
-    val meetups = remember {
-        mutableStateListOf(
-            RideMeetup(
-                title = "Junta MTB sábado",
-                routeName = "Ruta Costanera Segura",
-                meetingPoint = "Metro Baquedano",
-                dateTime = "Sábado 09:00",
-                organizer = "Matías",
-                level = "Intermedio",
-                maxRiders = "8",
-                notes = "Llevar casco, agua y luces.",
-                participants = listOf("Matías")
-            )
-        )
-    }
-    val messages = remember {
-        mutableStateListOf(
-            ChatMessage(
-                sender = "Técnico APPbike",
-                message = "Hola, puedes escribir tu duda técnica o consultar por una mantención."
-            )
-        )
-    }
+    var chatToOpen by remember { mutableStateOf<UserChat?>(null) }
+    val pendingNotifications = remember { mutableStateListOf<MessageNotificationEvent>() }
+    var activeNotification by remember { mutableStateOf<MessageNotificationEvent?>(null) }
+    var unreadMessages by remember { mutableStateOf(0) }
     val platforms = remember {
         mutableStateListOf(
-            SyncPlatform("Strava", "Actividades, rutas y entrenamientos.", false),
-            SyncPlatform("Garmin", "Relojes, ciclocomputadores y sensores.", false),
-            SyncPlatform("Wahoo", "Entrenamientos y dispositivos deportivos.", false)
+            SyncPlatform("strava", "Strava", "Actividades, rutas y entrenamientos.", false),
+            SyncPlatform("garmin", "Garmin", "Relojes, ciclocomputadores y sensores.", false),
+            SyncPlatform("wahoo", "Wahoo", "Entrenamientos y dispositivos deportivos.", false)
         )
     }
 
@@ -154,6 +206,55 @@ fun AppBikeApp() {
         )
     }
 
+    LaunchedEffect(accountSession?.userId, accountSession?.username) {
+        val session = accountSession ?: return@LaunchedEffect
+        (context as? MainActivity)?.requestNotificationPermissionOnce()
+        if (session.username.isNullOrBlank()) {
+            currentScreen = AppScreen.ACCOUNT
+        }
+    }
+
+    LaunchedEffect(accountSession?.userId) {
+        val session = accountSession
+        if (session == null) {
+            ChatNotificationCenter.stopListener(context)
+            ChatNotificationCenter.cancelBackgroundChecks(context)
+            pendingNotifications.clear()
+            activeNotification = null
+            unreadMessages = 0
+            return@LaunchedEffect
+        }
+        ChatNotificationCenter.startListener(context)
+        ChatNotificationCenter.scheduleBackgroundChecks(context)
+    }
+
+    LaunchedEffect(Unit) {
+        ChatNotificationEventBus.events.collect { event ->
+            pendingNotifications.add(event)
+            unreadMessages += 1
+        }
+    }
+
+    LaunchedEffect(pendingNotifications.size, activeNotification?.messageId) {
+        if (activeNotification == null && pendingNotifications.isNotEmpty()) {
+            activeNotification = pendingNotifications.removeAt(0)
+        }
+    }
+
+    LaunchedEffect(activeNotification?.messageId) {
+        if (activeNotification == null) return@LaunchedEffect
+        delay(5_000L)
+        activeNotification = null
+    }
+
+    LaunchedEffect(notificationTarget?.chatId) {
+        val target = notificationTarget ?: return@LaunchedEffect
+        chatToOpen = target.asChat()
+        currentScreen = AppScreen.CHAT
+        unreadMessages = 0
+        onNotificationTargetConsumed()
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -167,8 +268,11 @@ fun AppBikeApp() {
             AppBottomBar(
                 destinations = destinations,
                 currentScreen = currentScreen,
-                unreadMessages = 0,
-                onNavigate = { currentScreen = it }
+                unreadMessages = unreadMessages,
+                onNavigate = {
+                    if (it == AppScreen.CHAT) unreadMessages = 0
+                    currentScreen = it
+                }
             )
         }
     ) { innerPadding ->
@@ -181,12 +285,23 @@ fun AppBikeApp() {
                 AppScreen.ACCOUNT, AppScreen.SYNC -> AccountScreen(
                     session = accountSession,
                     platforms = platforms,
+                    oauthCallback = oauthCallback,
+                    onOauthCallbackConsumed = onOauthCallbackConsumed,
                     onLogin = { session ->
                         AccountStore.saveSession(context, session)
+                        RemoteConnections.setSession(session)
+                        accountSession = session
+                    },
+                    onSessionUpdated = { session ->
+                        AccountStore.saveSession(context, session)
+                        RemoteConnections.setSession(session)
                         accountSession = session
                     },
                     onLogout = {
+                        ChatNotificationCenter.stopListener(context)
+                        ChatNotificationCenter.cancelBackgroundChecks(context)
                         AccountStore.clearSession(context)
+                        RemoteConnections.setSession(null)
                         accountSession = null
                         bikes.clear()
                         reminders.clear()
@@ -204,11 +319,89 @@ fun AppBikeApp() {
                 )
 
                 AppScreen.MARKETPLACE, AppScreen.CREATE_PUBLICATION ->
-                    MarketplaceScreen(accountSession)
+                    MarketplaceScreen(accountSession) { chat ->
+                        chatToOpen = chat
+                        currentScreen = AppScreen.CHAT
+                    }
 
-                AppScreen.ROUTES, AppScreen.HOME -> RoutesScreen(accountSession)
+                AppScreen.ROUTES, AppScreen.HOME -> RoutesScreen(accountSession) { chat ->
+                    chatToOpen = chat
+                    currentScreen = AppScreen.CHAT
+                }
 
-                AppScreen.CHAT -> ChatScreen(accountSession)
+                AppScreen.CHAT -> ChatScreen(
+                    accountSession,
+                    initialChat = chatToOpen,
+                    onInitialChatConsumed = { chatToOpen = null }
+                )
+            }
+
+            val notification = activeNotification
+            AnimatedVisibility(
+                visible = notification != null,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
+            ) {
+                notification?.let { event ->
+                    InAppMessageBanner(
+                        event = event,
+                        onOpen = {
+                            chatToOpen = event.asChat()
+                            currentScreen = AppScreen.CHAT
+                            unreadMessages = 0
+                            activeNotification = null
+                        },
+                        onDismiss = { activeNotification = null }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InAppMessageBanner(
+    event: MessageNotificationEvent,
+    onOpen: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shadowElevation = 10.dp,
+        tonalElevation = 4.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Outlined.ChatBubbleOutline,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    event.senderName,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    event.message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2
+                )
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(Icons.Outlined.Close, contentDescription = "Cerrar aviso")
             }
         }
     }
@@ -284,7 +477,6 @@ private fun AppBottomBar(
 ) {
     Surface(shadowElevation = 12.dp) {
         NavigationBar(
-            modifier = Modifier.height(76.dp),
             containerColor = MaterialTheme.colorScheme.surface
         ) {
             destinations.forEach { destination ->

@@ -51,6 +51,7 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
     implementation("org.maplibre.gl:android-sdk-opengl:13.0.2")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

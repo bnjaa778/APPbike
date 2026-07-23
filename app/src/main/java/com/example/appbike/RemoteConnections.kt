@@ -13,11 +13,28 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.UUID
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 object RemoteConnections {
 
     private const val API_URL = "https://api.zizzio.cl/APIS/AppBikeExternal.php"
     private const val PUBLIC_BASE_URL = "https://api.zizzio.cl/"
+    private const val OPEN_STREET_MAP_GEOCODER = "https://nominatim.openstreetmap.org"
+    private const val GEOCODER_USER_AGENT = "APPbike-Android/1.0 (https://zizzio.cl)"
+    private const val GEOCODER_MIN_INTERVAL_MS = 1_000L
+    private const val GEOCODER_CACHE_LIMIT = 30
+    private const val DEFAULT_COMMUNITY_REGION = "LAS"
+    private val geocoderRequestLock = Any()
+    private val geocoderCache = linkedMapOf<String, List<GeoPoint>>()
+    private var lastGeocoderRequestAt = 0L
+    @Volatile private var accessToken: String = ""
+
+    fun setSession(session: AccountSession?) {
+        accessToken = session?.accessToken.orEmpty()
+    }
 
     fun login(email: String, password: String): AccountSession {
         val response = postJson(
@@ -34,7 +51,49 @@ object RemoteConnections {
             ?.takeIf { it.isNotBlank() }
             ?: response.optString("email", email.trim())
 
-        return AccountSession(userId = userId, email = userEmail)
+        return AccountSession(
+            userId = userId,
+            email = userEmail,
+            accessToken = response.firstString("access_token", "token")
+                ?: user?.firstString("access_token", "token").orEmpty(),
+            username = user?.firstString("nombre_de_usuario", "username")
+                ?: response.firstString("nombre_de_usuario", "username")
+        )
+    }
+
+    fun loadUserProfile(account: AccountSession): AccountSession {
+        val response = postJson(JSONObject().put("action", "user.get"))
+        return accountSessionFromProfileResponse(response, account)
+    }
+
+    fun updateUsername(account: AccountSession, username: String): AccountSession {
+        val response = postJson(
+            JSONObject()
+                .put("action", "user.username.update")
+                .put("nombre_de_usuario", username.trim())
+        )
+        return accountSessionFromProfileResponse(response, account)
+    }
+
+    private fun accountSessionFromProfileResponse(
+        response: JSONObject,
+        fallback: AccountSession
+    ): AccountSession {
+        val user = response.optJSONObject("user")
+        val returnedId = user?.firstString("id", "user_id")
+            ?: response.firstString("user_id", "id")
+            ?: fallback.userId
+        if (returnedId != fallback.userId) {
+            throw RemoteConnectionException("El servidor devolviÃ³ un perfil distinto.")
+        }
+        return fallback.copy(
+            email = user?.firstString("email")
+                ?: response.firstString("email")
+                ?: fallback.email,
+            username = user?.firstString("nombre_de_usuario", "username")
+                ?: response.firstString("nombre_de_usuario", "username")
+                ?: fallback.username
+        )
     }
 
     fun loadUserBikes(userId: String): List<Bike> {
@@ -249,159 +308,570 @@ object RemoteConnections {
         )
     }
 
-    fun updateBikeTheftStatus(bike: Bike, isStolen: Boolean): Bike =
-        bike.copy(isStolen = isStolen)
-
-    fun publishProduct(publication: ProductPublication): ProductPublication = publication
-
-    fun contactSeller(publication: ProductPublication) = Unit
-
-    fun publishRoute(route: RoutePost): RoutePost = route
-
-    fun createMeetup(meetup: RideMeetup): RideMeetup = meetup
-
-    fun updateMeetupMembership(meetup: RideMeetup, join: Boolean): RideMeetup =
-        meetup.copy(
-            participants = if (join) {
-                meetup.participants + "Yo"
-            } else {
-                meetup.participants - "Yo"
-            }
-        )
-
-    fun sendChatMessage(message: ChatMessage): ChatMessage = message
-
-    fun setSportsPlatformConnection(
-        platform: SyncPlatform,
-        connected: Boolean
-    ): SyncPlatform = platform.copy(connected = connected)
-
     fun loadNearbyMeetups(
         center: GeoPoint,
         query: String = "",
-        radiusKm: Int = 40
+        radiusKm: Int = 40,
+        status: String = "activa"
     ): List<MeetupEvent> {
-        val response = getResource(
-            "juntas",
-            mapOf(
-                "lat" to center.latitude.toString(),
-                "lng" to center.longitude.toString(),
-                "radiusKm" to radiusKm.toString(),
-                "q" to query
-            )
-        )
-        return response.firstArray("juntas", "events", "items")
-            .mapObjects(::meetupFromJson)
+        val basePayload = JSONObject()
+                .put("action", "junta.list")
+                .put("region", communityRegionFor(center))
+                .put("junta_status", status)
+                .put("lat", center.latitude)
+                .put("lng", center.longitude)
+                .put("radius_km", radiusKm)
+                .put("q", query.trim())
+                .put("limit", 100)
+        val loaded = mutableListOf<MeetupEvent>()
+        for (offset in 0 until 500 step 100) {
+            val response = postJson(JSONObject(basePayload.toString()).put("offset", offset))
+            val page = response.firstArray("juntas", "events", "items")
+                .mapObjects(::meetupFromJson)
+            loaded.addAll(page)
+            if (page.size < 100) break
+        }
+        val cleanQuery = query.trim()
+        return loaded.distinctBy(MeetupEvent::id)
+            .filter { event ->
+                cleanQuery.isBlank() || listOf(
+                    event.title,
+                    event.description,
+                    event.location
+                ).any { it.contains(cleanQuery, ignoreCase = true) }
+            }
+            .filter { event ->
+                !event.hasCoordinates() || distanceKm(
+                    center.latitude,
+                    center.longitude,
+                    event.latitude,
+                    event.longitude
+                ) <= radiusKm
+            }
     }
 
-    fun searchLocation(query: String): GeoPoint {
-        val coordinateParts = query.split(',').map(String::trim)
+    fun searchLocation(query: String): GeoPoint = searchLocations(query).firstOrNull()
+        ?: throw RemoteConnectionException("No se encontró esa ubicación.")
+
+    fun searchLocations(
+        query: String,
+        connectTimeoutMs: Int = 15_000,
+        readTimeoutMs: Int = 20_000
+    ): List<GeoPoint> {
+        val cleanQuery = query.trim()
+        val coordinateParts = cleanQuery.split(',').map(String::trim)
         if (coordinateParts.size == 2) {
             val latitude = coordinateParts[0].toDoubleOrNull()
             val longitude = coordinateParts[1].toDoubleOrNull()
-            if (latitude != null && longitude != null) {
-                return GeoPoint(latitude, longitude, query)
+            if (
+                latitude != null && longitude != null &&
+                latitude in -90.0..90.0 && longitude in -180.0..180.0
+            ) {
+                return listOf(GeoPoint(latitude, longitude, cleanQuery))
             }
         }
-        val response = getResource("locations/search", mapOf("q" to query))
-        val item = response.firstObject("location", "item")
-            ?: response.firstArray("locations", "items")?.optJSONObject(0)
-            ?: throw RemoteConnectionException("No se encontró esa ubicación.")
-        return GeoPoint(
-            latitude = item.optDouble("latitude", item.optDouble("lat")),
-            longitude = item.optDouble("longitude", item.optDouble("lng")),
-            label = item.firstString("label", "name", "address").orEmpty()
+
+        if (cleanQuery.length < 3) {
+            throw RemoteConnectionException("Escribe al menos 3 caracteres para buscar.")
+        }
+
+        val cacheKey = cleanQuery.lowercase(Locale.ROOT)
+        synchronized(geocoderCache) {
+            geocoderCache[cacheKey]?.let { return it }
+        }
+
+        val backendResults = runCatching {
+            val response = postJson(
+                JSONObject()
+                    .put("action", "location.search")
+                    .put("q", cleanQuery)
+                    .put("limit", 5)
+            )
+            response.firstArray("locations", "items").mapObjects(::geoPointFromJson)
+        }.getOrDefault(emptyList())
+        if (backendResults.isNotEmpty()) {
+            synchronized(geocoderCache) { geocoderCache[cacheKey] = backendResults }
+            return backendResults
+        }
+
+        val url = "$OPEN_STREET_MAP_GEOCODER/search" +
+            "?format=jsonv2&addressdetails=1&limit=5" +
+            "&accept-language=es&q=${encode(cleanQuery)}"
+        val response = JSONArray(
+            executeOpenStreetMapRequest(
+                url = url,
+                connectTimeoutMs = connectTimeoutMs,
+                readTimeoutMs = readTimeoutMs
+            )
+        )
+        val results = buildList {
+            for (index in 0 until response.length()) {
+                val item = response.optJSONObject(index) ?: continue
+                val latitude = item.optString("lat").toDoubleOrNull() ?: continue
+                val longitude = item.optString("lon").toDoubleOrNull() ?: continue
+                val address = item.optJSONObject("address")
+                val countryCode = address?.optString("country_code")
+                    .orEmpty().uppercase(Locale.ROOT)
+                val administrativeArea = address?.firstString("state", "region", "county").orEmpty()
+                add(GeoPoint(
+                    latitude = latitude,
+                    longitude = longitude,
+                    label = item.optString("display_name").ifBlank { "$latitude, $longitude" },
+                    countryCode = countryCode,
+                    administrativeArea = administrativeArea,
+                    regionCode = item.firstString("region_code")
+                        ?: communityRegionCodeFor(countryCode, administrativeArea),
+                    currencyCode = currencyCodeForCountry(countryCode)
+                ))
+            }
+        }
+        if (results.isEmpty()) {
+            throw RemoteConnectionException("No se encontró esa ubicación.")
+        }
+        synchronized(geocoderCache) {
+            geocoderCache[cacheKey] = results
+            while (geocoderCache.size > GEOCODER_CACHE_LIMIT) {
+                geocoderCache.remove(geocoderCache.keys.first())
+            }
+        }
+        return results
+    }
+
+    fun reverseGeocodeLocation(point: GeoPoint): GeoPoint {
+        val backend = runCatching {
+            postJson(
+                JSONObject()
+                    .put("action", "location.reverse")
+                    .put("lat", point.latitude)
+                    .put("lng", point.longitude)
+            ).firstObject("location", "item")?.let(::geoPointFromJson)
+        }.getOrNull()
+        if (backend != null) return backend
+
+        val url = "$OPEN_STREET_MAP_GEOCODER/reverse" +
+            "?format=jsonv2&addressdetails=1&zoom=14&accept-language=es" +
+            "&lat=${point.latitude}&lon=${point.longitude}"
+        val item = JSONObject(executeOpenStreetMapRequest(url))
+        val address = item.optJSONObject("address")
+        val countryCode = address?.optString("country_code")
+            .orEmpty().uppercase(Locale.ROOT)
+        val administrativeArea = address?.firstString("state", "region", "county").orEmpty()
+        return point.copy(
+            label = item.optString("display_name").ifBlank { formatCoordinates(point) },
+            countryCode = countryCode,
+            administrativeArea = administrativeArea,
+            regionCode = communityRegionCodeFor(countryCode, administrativeArea),
+            currencyCode = currencyCodeForCountry(countryCode)
         )
     }
 
-    fun createMeetupEvent(event: MeetupEvent): MeetupEvent {
-        val response = postResource(
-            "juntas/events",
+    fun resolveCommunityLocation(point: GeoPoint): GeoPoint {
+        val localFallback = point.copy(
+            regionCode = point.regionCode.ifBlank {
+                communityRegionCodeFor(point.countryCode, point.administrativeArea)
+            },
+            currencyCode = point.currencyCode.ifBlank {
+                currencyCodeForCountry(point.countryCode)
+            }
+        )
+        return runCatching {
+            postJson(
+                JSONObject()
+                    .put("action", "location.resolve")
+                    .put("lat", point.latitude)
+                    .put("lng", point.longitude)
+                    .put("label", point.label)
+                    .put("country_code", point.countryCode)
+                    .put("administrative_area", point.administrativeArea)
+            ).firstObject("location", "item")?.let(::geoPointFromJson)
+                ?: localFallback
+        }.getOrDefault(localFallback)
+    }
+
+    fun createMeetupEvent(context: Context, event: MeetupEvent): MeetupEvent {
+        val region = event.region.ifBlank {
+            communityRegionFor(GeoPoint(event.latitude, event.longitude, event.location))
+        }
+        val location = if (parseCommunityLocation(event.location) != null) {
+            event.location
+        } else {
+            communityLocation(
+                region,
+                GeoPoint(
+                    event.latitude,
+                    event.longitude,
+                    event.location.ifBlank { event.title }
+                )
+            )
+        }
+        val response = postJson(
             JSONObject()
-                .put("title", event.title)
-                .put("dateTime", event.dateTime)
-                .put("description", event.description)
+                .put("action", "junta.create")
+                .put("region", region)
+                .put("user_id", event.createdBy)
+                .put("location", location)
                 .put("latitude", event.latitude)
                 .put("longitude", event.longitude)
-                .put("createdBy", event.createdBy)
+                .put("country_code", event.countryCode)
+                .put("administrative_area", event.administrativeArea)
+                .put("title", event.title.trim())
+                .put("description", event.description.trim())
+                .put("junta_status", event.status.ifBlank { "activa" })
+        )
+        val created = response.firstObject("junta", "event", "item")
+            ?.let(::meetupFromJson)
+            ?: throw RemoteConnectionException("El servidor no devolvió la junta creada.")
+        if (created.id.isBlank()) {
+            throw RemoteConnectionException("La junta creada no tiene un ID regional.")
+        }
+        if (event.imageUri.isNotBlank()) {
+            uploadMeetupPhoto(context, event.createdBy, created.id, event.imageUri)
+        }
+        return loadMeetupDetails(created.id)
+    }
+
+    fun loadMeetupDetails(juntaId: String): MeetupEvent {
+        val response = postJson(
+            JSONObject()
+                .put("action", "junta.get")
+                .put("junta_id", juntaId)
         )
         return response.firstObject("junta", "event", "item")
             ?.let(::meetupFromJson)
-            ?: event
+            ?: throw RemoteConnectionException("El servidor no devolvió la junta.")
+    }
+
+    fun updateMeetupStatus(userId: String, juntaId: String, status: String): MeetupEvent {
+        postJson(
+            JSONObject()
+                .put("action", "junta.status.update")
+                .put("user_id", userId)
+                .put("junta_id", juntaId)
+                .put("junta_status", status)
+        )
+        return loadMeetupDetails(juntaId)
+    }
+
+    fun completeMeetup(userId: String, juntaId: String): MeetupEvent {
+        postJson(
+            JSONObject()
+                .put("action", "junta.complete")
+                .put("user_id", userId)
+                .put("junta_id", juntaId)
+        )
+        return loadMeetupDetails(juntaId)
+    }
+
+    fun uploadMeetupPhoto(context: Context, userId: String, juntaId: String, imageUri: String) {
+        postMultipart(
+            context,
+            linkedMapOf(
+                "action" to "junta.photo.upload",
+                "user_id" to userId,
+                "junta_id" to juntaId
+            ),
+            Uri.parse(imageUri)
+        )
+    }
+
+    fun loadMeetupPhoto(juntaId: String, photoId: String): ByteArray = loadCommunityPhoto(
+        action = "junta.photo.get",
+        parentField = "junta_id",
+        parentId = juntaId,
+        photoId = photoId
+    )
+
+    fun communityRegionFor(point: GeoPoint): String {
+        if (point.regionCode.matches(Regex("[A-Za-z]{3}"))) {
+            return point.regionCode.uppercase(Locale.ROOT)
+        }
+        val explicit = Regex("""^\s*([A-Za-z]{3}):""")
+            .find(point.label)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.uppercase(Locale.ROOT)
+        return explicit ?: DEFAULT_COMMUNITY_REGION
     }
 
     fun loadMarketplacePosts(
         center: GeoPoint,
         query: String = "",
-        radiusKm: Int = 40
+        radiusKm: Int = 40,
+        status: String = "activa"
     ): List<ProductPublication> {
-        val response = getResource(
-            "marketplace",
-            mapOf(
-                "lat" to center.latitude.toString(),
-                "lng" to center.longitude.toString(),
-                "radiusKm" to radiusKm.toString(),
-                "q" to query
-            )
-        )
-        return response.firstArray("posts", "publications", "items")
-            .mapObjects(::marketplaceFromJson)
+        val basePayload = JSONObject()
+                .put("action", "marketplace.list")
+                .put("region", communityRegionFor(center))
+                .put("publication_status", status)
+                .put("lat", center.latitude)
+                .put("lng", center.longitude)
+                .put("radius_km", radiusKm)
+                .put("q", query.trim())
+                .put("limit", 100)
+        val loaded = mutableListOf<ProductPublication>()
+        for (offset in 0 until 500 step 100) {
+            val response = postJson(JSONObject(basePayload.toString()).put("offset", offset))
+            val page = response.firstArray("posts", "publications", "items")
+                .mapObjects(::marketplaceFromJson)
+            loaded.addAll(page)
+            if (page.size < 100) break
+        }
+        val cleanQuery = query.trim()
+        return loaded.distinctBy(ProductPublication::id)
+            .filter { post ->
+                cleanQuery.isBlank() || listOf(
+                    post.title,
+                    post.description,
+                    post.productStatus,
+                    post.location
+                ).any { it.contains(cleanQuery, ignoreCase = true) }
+            }
+            .filter { post ->
+                !post.hasCoordinates() || distanceKm(
+                    center.latitude,
+                    center.longitude,
+                    post.latitude,
+                    post.longitude
+                ) <= radiusKm
+            }
     }
 
     fun createMarketplacePost(
         context: Context,
         post: ProductPublication
     ): ProductPublication {
-        val fields = linkedMapOf(
-            "title" to post.title.trim(),
-            "brand" to post.brand.trim(),
-            "model" to post.model.trim(),
-            "product_type" to post.productType.trim(),
-            "price" to post.price.trim(),
-            "description" to post.description.trim(),
-            "latitude" to post.latitude.toString(),
-            "longitude" to post.longitude.toString(),
-            "createdBy" to post.createdBy
-        )
-        val response = if (post.imageUri.isBlank()) {
-            postResource(
-                "marketplace",
-                JSONObject().apply { fields.forEach { (key, value) -> put(key, value) } }
-            )
+        val price = marketplaceWholeUnitPrice(post.price)
+        val region = post.region.ifBlank {
+            communityRegionFor(GeoPoint(post.latitude, post.longitude, post.location))
+        }
+        val location = if (parseCommunityLocation(post.location) != null) {
+            post.location
         } else {
-            postEndpointMultipart(
-                context = context,
-                path = "marketplace",
-                fields = fields,
-                imageUri = Uri.parse(post.imageUri),
-                fileField = "foto"
+            communityLocation(
+                region,
+                GeoPoint(
+                    post.latitude,
+                    post.longitude,
+                    post.location.ifBlank { post.title }
+                )
             )
         }
-        return response.firstObject("post", "publication", "item")
-            ?.let(::marketplaceFromJson)
-            ?: post
-    }
-
-    fun loadMarketplacePhoto(photoId: String): ByteArray {
         val response = postJson(
             JSONObject()
-                .put("action", "marketplace.photo.get")
-                .put("photo_id", photoId)
+                .put("action", "marketplace.create")
+                .put("region", region)
+                .put("user_id", post.createdBy)
+                .put("location", location)
+                .put("latitude", post.latitude)
+                .put("longitude", post.longitude)
+                .put("country_code", post.countryCode)
+                .put("administrative_area", post.administrativeArea)
+                .put("title", post.title.trim())
+                .put("description", post.description.trim())
+                .put("price", price)
+                .put("currency", post.currencyCode.ifBlank { "CLP" }.uppercase(Locale.ROOT))
+                .put("product_status", post.productStatus.ifBlank { post.condition })
+                .put(
+                    "publication_status",
+                    post.publicationStatus.ifBlank { "activa" }
+                )
         )
-        val photo = response.firstObject("photo", "item")
-            ?: throw RemoteConnectionException("El servidor no devolvió la fotografía.")
-        val content = photo.optString("content_base64")
-            .takeIf { it.isNotBlank() && it != "null" }
-            ?: throw RemoteConnectionException(
-                "El servidor no devolvió el contenido de la fotografía."
-            )
-        return runCatching { Base64.decode(content, Base64.DEFAULT) }.getOrElse {
-            throw RemoteConnectionException("La fotografía recibida no es válida.", it)
+        val created = response.firstObject("post", "publication", "item")
+            ?.let(::marketplaceFromJson)
+            ?: throw RemoteConnectionException("El servidor no devolvió la publicación creada.")
+        if (created.id.isBlank()) {
+            throw RemoteConnectionException("La publicación creada no tiene un ID regional.")
         }
+        if (post.imageUri.isNotBlank()) {
+            uploadMarketplacePhoto(context, post.createdBy, created.id, post.imageUri)
+        }
+        return loadMarketplaceDetails(created.id)
+    }
+
+    private fun marketplaceWholeUnitPrice(raw: String): Long {
+        return parseMarketplaceWholeUnitPrice(raw) ?: throw RemoteConnectionException(
+            "El precio debe ser mayor que cero e ingresarse sin decimales."
+        )
+    }
+
+    fun loadMarketplaceDetails(publicationId: String): ProductPublication {
+        val response = postJson(
+            JSONObject()
+                .put("action", "marketplace.get")
+                .put("publication_id", publicationId)
+        )
+        return response.firstObject("post", "publication", "item")
+            ?.let(::marketplaceFromJson)
+            ?: throw RemoteConnectionException("El servidor no devolvió la publicación.")
+    }
+
+    fun updateMarketplaceStatus(
+        userId: String,
+        publicationId: String,
+        status: String
+    ): ProductPublication {
+        postJson(
+            JSONObject()
+                .put("action", "marketplace.status.update")
+                .put("user_id", userId)
+                .put("publication_id", publicationId)
+                .put("publication_status", status)
+        )
+        return loadMarketplaceDetails(publicationId)
+    }
+
+    fun uploadMarketplacePhoto(
+        context: Context,
+        userId: String,
+        publicationId: String,
+        imageUri: String
+    ) {
+        postMultipart(
+            context,
+            linkedMapOf(
+                "action" to "marketplace.photo.upload",
+                "user_id" to userId,
+                "publication_id" to publicationId
+            ),
+            Uri.parse(imageUri)
+        )
+    }
+
+    fun loadMarketplacePhoto(publicationId: String, photoId: String): ByteArray =
+        loadCommunityPhoto(
+        action = "marketplace.photo.get",
+        parentField = "publication_id",
+        parentId = publicationId,
+        photoId = photoId
+    )
+
+    fun loadOwnMarketplacePosts(
+        userId: String,
+        center: GeoPoint,
+        statuses: List<String> = listOf("activa", "pausada", "vendida", "en_revision")
+    ): List<ProductPublication> {
+        val directResult = runCatching {
+            postJson(
+                JSONObject()
+                    .put("action", "marketplace.mine.list")
+                    .put("user_id", userId)
+                    .put("limit", 500)
+                    .put("offset", 0)
+            ).firstArray("publications", "posts", "items")
+                .mapObjects(::marketplaceFromJson)
+        }
+        directResult.getOrNull()?.let { return it }
+        if (accessToken.isNotBlank()) throw directResult.exceptionOrNull()!!
+
+        val region = communityRegionFor(center)
+        return statuses.flatMap { status ->
+            postJson(
+                JSONObject()
+                    .put("action", "marketplace.list")
+                    .put("region", region)
+                    .put("user_id", userId)
+                    .put("publication_status", status)
+                    .put("limit", 500)
+                    .put("offset", 0)
+            ).firstArray("publications", "posts", "items")
+                .mapObjects(::marketplaceFromJson)
+                .filter { it.createdBy == userId }
+        }.distinctBy(ProductPublication::id)
+    }
+
+    fun updateMarketplacePost(
+        userId: String,
+        publication: ProductPublication
+    ): ProductPublication {
+        postJson(
+            JSONObject()
+                .put("action", "marketplace.update")
+                .put("user_id", userId)
+                .put("publication_id", publication.id)
+                .put("title", publication.title.trim())
+                .put("description", publication.description.trim())
+                .put("price", marketplaceWholeUnitPrice(publication.price))
+                .put("currency", publication.currencyCode.uppercase(Locale.ROOT))
+                .put("product_status", publication.productStatus)
+        )
+        return loadMarketplaceDetails(publication.id)
+    }
+
+    fun deleteMarketplacePost(userId: String, publicationId: String) {
+        postJson(
+            JSONObject()
+                .put("action", "marketplace.delete")
+                .put("user_id", userId)
+                .put("publication_id", publicationId)
+        )
+    }
+
+    fun loadOwnMeetups(userId: String, center: GeoPoint): List<MeetupEvent> {
+        val directResult = runCatching {
+            postJson(
+                JSONObject()
+                    .put("action", "junta.mine.list")
+                    .put("user_id", userId)
+                    .put("limit", 500)
+                    .put("offset", 0)
+            ).firstArray("juntas", "events", "items").mapObjects(::meetupFromJson)
+        }
+        directResult.getOrNull()?.let { return it }
+        if (accessToken.isNotBlank()) throw directResult.exceptionOrNull()!!
+
+        val region = communityRegionFor(center)
+        return listOf("activa", "pasada").flatMap { status ->
+            postJson(
+                JSONObject()
+                    .put("action", "junta.list")
+                    .put("region", region)
+                    .put("user_id", userId)
+                    .put("junta_status", status)
+                    .put("limit", 500)
+                    .put("offset", 0)
+            ).firstArray("juntas", "events", "items")
+                .mapObjects(::meetupFromJson)
+                .filter { it.createdBy == userId }
+        }.distinctBy(MeetupEvent::id)
+    }
+
+    fun updateMeetupEvent(userId: String, event: MeetupEvent): MeetupEvent {
+        postJson(
+            JSONObject()
+                .put("action", "junta.update")
+                .put("user_id", userId)
+                .put("junta_id", event.id)
+                .put("title", event.title.trim())
+                .put("description", event.description.trim())
+                .put("location", event.location)
+        )
+        return loadMeetupDetails(event.id)
+    }
+
+    fun deleteMeetupEvent(userId: String, juntaId: String) {
+        postJson(
+            JSONObject()
+                .put("action", "junta.delete")
+                .put("user_id", userId)
+                .put("junta_id", juntaId)
+        )
     }
 
     fun loadUserChats(userId: String): List<UserChat> {
-        val response = getResource("chats", mapOf("userId" to userId))
+        val primary = runCatching {
+            postJson(
+                JSONObject()
+                    .put("action", "chat.list")
+                    .put("user_id", userId)
+                    .put("limit", 200)
+                    .put("offset", 0)
+            )
+        }
+        val response = primary.getOrNull() ?: if (accessToken.isBlank()) {
+            getResource("chats", mapOf("userId" to userId))
+        } else {
+            throw primary.exceptionOrNull()!!
+        }
         return response.firstArray("chats", "items").mapObjects(::chatFromJson)
     }
 
@@ -409,24 +879,177 @@ object RemoteConnections {
         userId: String,
         chatId: String,
         afterMessageId: String = ""
-    ): List<StoredMessage> {
-        val response = getResource(
-            "chats/$chatId/messages",
-            mapOf("userId" to userId, "after" to afterMessageId)
+    ): List<StoredMessage> = loadChatMessagePage(
+        userId = userId,
+        chatId = chatId,
+        afterMessageId = afterMessageId
+    ).messages
+
+    fun loadChatMessagePage(
+        userId: String,
+        chatId: String,
+        afterMessageId: String = ""
+    ): ChatMessagePage {
+        val primary = runCatching {
+            postJson(
+                JSONObject()
+                    .put("action", "chat.messages.list")
+                    .put("user_id", userId)
+                    .put("chat_id", chatId)
+                    .put("limit", 200)
+                    .apply {
+                        // The backend treats an empty cursor as invalid. Omitting it requests
+                        // the complete first page and also repairs older local cache gaps.
+                        if (afterMessageId.isNotBlank()) {
+                            put("after_message_id", afterMessageId)
+                        }
+                    }
+            )
+        }
+        val response = primary.getOrNull() ?: if (accessToken.isBlank()) {
+            getResource(
+                "chats/$chatId/messages",
+                mapOf("userId" to userId, "after" to afterMessageId)
+            )
+        } else {
+            throw primary.exceptionOrNull()!!
+        }
+        val messages = response.firstArray("messages", "items")
+            .mapObjects(::messageFromJson)
+        val metadata = response.firstObject("metadata", "sync", "pagination")
+        val messageCount = response.firstInt("messageCount", "message_count", "total")
+            ?: metadata?.firstInt("messageCount", "message_count", "total")
+            ?: messages.size
+        val version = response.firstLongValue("version")
+            ?: metadata?.firstLongValue("version")
+            ?: 0L
+        val hasMore = when {
+            response.has("hasMore") -> response.optBoolean("hasMore")
+            response.has("has_more") -> response.optBoolean("has_more")
+            metadata?.has("hasMore") == true -> metadata.optBoolean("hasMore")
+            metadata?.has("has_more") == true -> metadata.optBoolean("has_more")
+            afterMessageId.isBlank() -> messageCount > messages.size
+            else -> false
+        }
+        return ChatMessagePage(
+            messages = messages,
+            messageCount = messageCount,
+            version = version,
+            hasMore = hasMore
         )
-        return response.firstArray("messages", "items").mapObjects(::messageFromJson)
     }
 
     fun sendChatMessage(userId: String, chatId: String, content: String): StoredMessage {
-        val response = postResource(
-            "chats/$chatId/messages",
-            JSONObject()
-                .put("senderId", userId)
-                .put("content", content)
-        )
+        val clientMessageId = UUID.randomUUID().toString()
+        val primary = runCatching {
+            postJson(
+                JSONObject()
+                    .put("action", "chat.message.send")
+                    .put("user_id", userId)
+                    .put("chat_id", chatId)
+                    .put("content", content.trim())
+                    .put("client_message_id", clientMessageId)
+            )
+        }
+        val response = primary.getOrNull() ?: if (accessToken.isBlank()) {
+            postResource(
+                "chats/$chatId/messages",
+                JSONObject()
+                    .put("senderId", userId)
+                    .put("content", content.trim())
+                    .put("clientMessageId", clientMessageId)
+            )
+        } else {
+            throw primary.exceptionOrNull()!!
+        }
         return response.firstObject("message", "item")
             ?.let(::messageFromJson)
             ?: throw RemoteConnectionException("El servidor no devolvió el mensaje enviado.")
+    }
+
+    fun getOrCreateChat(
+        userId: String,
+        relatedUserId: String,
+        type: ChatType,
+        relatedEntityId: String,
+        title: String
+    ): UserChat {
+        if (relatedUserId.isBlank() || relatedUserId == userId) {
+            throw RemoteConnectionException("No puedes iniciar esta conversación.")
+        }
+        val response = postJson(
+            JSONObject()
+                .put("action", "chat.get_or_create")
+                .put("user_id", userId)
+                .put("participant_user_id", relatedUserId)
+                .put("chat_type", type.name.lowercase(Locale.ROOT))
+                .put("related_entity_id", relatedEntityId)
+                .put("title", title.trim())
+        )
+        return response.firstObject("chat", "item")?.let(::chatFromJson)
+            ?: throw RemoteConnectionException("El servidor no devolvió la conversación.")
+    }
+
+    fun loadSportsConnections(userId: String): List<SyncPlatform> {
+        val response = postJson(
+            JSONObject()
+                .put("action", "sports.connections.list")
+                .put("user_id", userId)
+        )
+        return response.firstArray("connections", "platforms", "items")
+            .mapObjects(::sportsPlatformFromJson)
+    }
+
+    fun beginSportsConnection(
+        userId: String,
+        provider: String,
+        redirectUri: String
+    ): SportsOAuthStart {
+        val response = postJson(
+            JSONObject()
+                .put("action", "sports.oauth.start")
+                .put("user_id", userId)
+                .put("provider", provider)
+                .put("redirect_uri", redirectUri)
+        )
+        val oauth = response.firstObject("oauth", "authorization", "item") ?: response
+        return SportsOAuthStart(
+            provider = provider,
+            authorizationUrl = oauth.firstString("authorization_url", "url")
+                ?: throw RemoteConnectionException("El servidor no devolvió la URL de autorización."),
+            state = oauth.optString("state")
+        )
+    }
+
+    fun completeSportsConnection(
+        userId: String,
+        callback: SportsOAuthCallback,
+        redirectUri: String
+    ): SyncPlatform {
+        val response = postJson(
+            JSONObject()
+                .put("action", "sports.oauth.complete")
+                .put("user_id", userId)
+                .put("provider", callback.provider)
+                .put("code", callback.code)
+                .put("state", callback.state)
+                .put("redirect_uri", redirectUri)
+        )
+        return response.firstObject("connection", "platform", "item")
+            ?.let(::sportsPlatformFromJson)
+            ?: throw RemoteConnectionException("El servidor no confirmó la conexión deportiva.")
+    }
+
+    fun disconnectSportsConnection(userId: String, provider: String): SyncPlatform {
+        val response = postJson(
+            JSONObject()
+                .put("action", "sports.connection.delete")
+                .put("user_id", userId)
+                .put("provider", provider)
+        )
+        return response.firstObject("connection", "platform", "item")
+            ?.let(::sportsPlatformFromJson)
+            ?: SyncPlatform(provider, provider.replaceFirstChar(Char::uppercase), "", false)
     }
 
     fun userFriendlyError(error: Throwable): String {
@@ -485,6 +1108,7 @@ object RemoteConnections {
             connection.connectTimeout = 15_000
             connection.readTimeout = 20_000
             connection.setRequestProperty("Accept", "application/json")
+            applyAuthorization(connection)
             if (payload != null) {
                 connection.doOutput = true
                 connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -510,6 +1134,136 @@ object RemoteConnections {
             connection.disconnect()
         }
     }
+
+    private fun executeOpenStreetMapRequest(
+        url: String,
+        connectTimeoutMs: Int = 15_000,
+        readTimeoutMs: Int = 20_000
+    ): String {
+        waitForGeocoderRateLimit()
+        val connection = URL(url).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "GET"
+            connection.connectTimeout = connectTimeoutMs.coerceAtLeast(1_000)
+            connection.readTimeout = readTimeoutMs.coerceAtLeast(1_000)
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("Accept-Language", "es-CL,es;q=0.9")
+            connection.setRequestProperty("User-Agent", GEOCODER_USER_AGENT)
+            val status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            val text = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (status !in 200..299 || text.isBlank()) {
+                throw RemoteConnectionException(
+                    "No fue posible buscar ubicaciones en este momento."
+                )
+            }
+            return text
+        } catch (error: RemoteConnectionException) {
+            throw error
+        } catch (error: Exception) {
+            throw RemoteConnectionException(
+                "No fue posible buscar ubicaciones: ${error.message ?: "error desconocido"}",
+                error
+            )
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun waitForGeocoderRateLimit() {
+        synchronized(geocoderRequestLock) {
+            val now = System.currentTimeMillis()
+            val remaining = GEOCODER_MIN_INTERVAL_MS - (now - lastGeocoderRequestAt)
+            if (remaining > 0) Thread.sleep(remaining)
+            lastGeocoderRequestAt = System.currentTimeMillis()
+        }
+    }
+
+    private fun loadCommunityPhoto(
+        action: String,
+        parentField: String,
+        parentId: String,
+        photoId: String
+    ): ByteArray {
+        val response = postJson(
+            JSONObject()
+                .put("action", action)
+                .put(parentField, parentId)
+                .put("photo_id", photoId)
+        )
+        val photo = response.firstObject("photo", "item") ?: response
+        val content = photo.optString("content_base64")
+            .takeIf { it.isNotBlank() && it != "null" }
+            ?: throw RemoteConnectionException(
+                "El servidor no devolvió el contenido de la fotografía."
+            )
+        return runCatching { Base64.decode(content, Base64.DEFAULT) }.getOrElse {
+            throw RemoteConnectionException("La fotografía recibida no es válida.", it)
+        }
+    }
+
+    private fun communityLocation(region: String, point: GeoPoint): String {
+        val label = point.label
+            .substringAfter('|', point.label)
+            .replace('|', ' ')
+            .replace('\n', ' ')
+            .trim()
+            .ifBlank { formatCoordinates(point) }
+        return String.format(
+            Locale.US,
+            "%s:%.6f,%.6f|%s",
+            region.uppercase(Locale.ROOT),
+            point.latitude,
+            point.longitude,
+            label
+        )
+    }
+
+    internal fun parseCommunityLocation(value: String): GeoPoint? {
+        val match = Regex(
+            """^\s*[A-Za-z]{3}:\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)"""
+        ).find(value) ?: return null
+        val latitude = match.groupValues[1].toDoubleOrNull() ?: return null
+        val longitude = match.groupValues[2].toDoubleOrNull() ?: return null
+        if (latitude !in -90.0..90.0 || longitude !in -180.0..180.0) return null
+        return GeoPoint(
+            latitude = latitude,
+            longitude = longitude,
+            label = value.substringAfter('|', value)
+        )
+    }
+
+    private fun MeetupEvent.hasCoordinates(): Boolean =
+        latitude in -90.0..90.0 && longitude in -180.0..180.0 &&
+            !(latitude == 0.0 && longitude == 0.0)
+
+    private fun ProductPublication.hasCoordinates(): Boolean =
+        latitude in -90.0..90.0 && longitude in -180.0..180.0 &&
+            !(latitude == 0.0 && longitude == 0.0)
+
+    private fun distanceKm(
+        firstLatitude: Double,
+        firstLongitude: Double,
+        secondLatitude: Double,
+        secondLongitude: Double
+    ): Double {
+        val earthRadiusKm = 6_371.0
+        val latDistance = Math.toRadians(secondLatitude - firstLatitude)
+        val lngDistance = Math.toRadians(secondLongitude - firstLongitude)
+        val firstLat = Math.toRadians(firstLatitude)
+        val secondLat = Math.toRadians(secondLatitude)
+        val a = sin(latDistance / 2) * sin(latDistance / 2) +
+            cos(firstLat) * cos(secondLat) *
+            sin(lngDistance / 2) * sin(lngDistance / 2)
+        return earthRadiusKm * 2 * atan2(sqrt(a), sqrt(1 - a))
+    }
+
+    private fun formatCoordinates(point: GeoPoint): String = String.format(
+        Locale.US,
+        "%.5f, %.5f",
+        point.latitude,
+        point.longitude
+    )
 
     private fun pathFromUrl(url: String): String = url.substringAfter("$API_URL/")
         .substringBefore('?')
@@ -588,6 +1342,7 @@ object RemoteConnections {
                 "multipart/form-data; boundary=$boundary"
             )
             connection.setRequestProperty("Accept", "application/json")
+            applyAuthorization(connection)
             BufferedOutputStream(connection.outputStream).use { output ->
                 fields.forEach { (name, value) ->
                     output.write("--$boundary\r\n".toByteArray())
@@ -646,6 +1401,7 @@ object RemoteConnections {
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", contentType)
             connection.setRequestProperty("Accept", "application/json")
+            applyAuthorization(connection)
             writeBody(connection)
 
             val statusCode = connection.responseCode
@@ -681,7 +1437,13 @@ object RemoteConnections {
         }
     }
 
-    private fun bikeFromJson(item: JSONObject): Bike {
+    private fun applyAuthorization(connection: HttpURLConnection) {
+        accessToken.takeIf(String::isNotBlank)?.let {
+            connection.setRequestProperty("Authorization", "Bearer $it")
+        }
+    }
+
+    internal fun bikeFromJson(item: JSONObject): Bike {
         val photoPath = item.optString("photo_path")
         val photoId = item.optString("photo_id")
         return Bike(
@@ -699,57 +1461,173 @@ object RemoteConnections {
         )
     }
 
-    private fun meetupFromJson(item: JSONObject) = MeetupEvent(
-        id = item.firstString("id", "event_id").orEmpty(),
-        title = item.optString("title"),
-        dateTime = item.firstString("dateTime", "date_time").orEmpty(),
-        description = item.optString("description"),
-        latitude = item.optDouble("latitude", item.optDouble("lat")),
-        longitude = item.optDouble("longitude", item.optDouble("lng")),
-        createdBy = item.firstString("createdBy", "created_by", "user_id").orEmpty(),
-        createdAt = item.firstString("createdAt", "created_at").orEmpty()
-    )
+    private fun geoPointFromJson(item: JSONObject): GeoPoint {
+        val latitude = item.firstDouble("latitude", "lat")
+            ?: throw RemoteConnectionException("La ubicación no incluye latitud.")
+        val longitude = item.firstDouble("longitude", "lng", "lon")
+            ?: throw RemoteConnectionException("La ubicación no incluye longitud.")
+        val countryCode = item.firstString("country_code", "countryCode")
+            .orEmpty().uppercase(Locale.ROOT)
+        val administrativeArea = item.firstString(
+            "administrative_area", "administrativeArea", "state", "region_name"
+        ).orEmpty()
+        return GeoPoint(
+            latitude = latitude,
+            longitude = longitude,
+            label = item.firstString("label", "display_name", "name")
+                ?: formatCoordinates(GeoPoint(latitude, longitude)),
+            countryCode = countryCode,
+            administrativeArea = administrativeArea,
+            regionCode = item.firstString("region_code", "regionCode")
+                ?: communityRegionCodeFor(countryCode, administrativeArea),
+            currencyCode = item.firstString("currency", "currency_code")
+                ?: currencyCodeForCountry(countryCode)
+        )
+    }
 
-    private fun marketplaceFromJson(item: JSONObject) = ProductPublication(
-        id = item.firstString("id", "post_id").orEmpty(),
-        title = item.optString("title"),
-        description = item.optString("description"),
-        price = item.optString("price"),
-        category = item.optString("category"),
-        condition = item.optString("condition"),
-        seller = item.firstString("seller", "createdBy", "created_by").orEmpty(),
-        mediaDescription = "",
-        latitude = item.optDouble("latitude", item.optDouble("lat")),
-        longitude = item.optDouble("longitude", item.optDouble("lng")),
-        images = item.optJSONArray("images").mapMarketplaceImages(),
-        createdBy = item.firstString("createdBy", "created_by", "user_id").orEmpty(),
-        createdAt = item.firstString("createdAt", "created_at").orEmpty(),
-        brand = item.optString("brand"),
-        model = item.optString("model"),
-        productType = item.firstString("productType", "product_type", "type").orEmpty()
-    )
+    internal fun meetupFromJson(item: JSONObject): MeetupEvent {
+        val location = item.optString("location")
+        val description = item.optString("description")
+        val point = parseCommunityLocation(location)
+        val photos = item.optJSONArray("photos") ?: item.optJSONArray("images")
+        val parentId = item.firstString("id", "event_id").orEmpty()
+        return MeetupEvent(
+            id = parentId,
+            title = item.optString("title"),
+            dateTime = item.firstString("dateTime", "date_time")
+                ?: description.lineValue("Fecha y hora:"),
+            description = description,
+            latitude = item.firstDouble("latitude", "lat") ?: point?.latitude ?: 0.0,
+            longitude = item.firstDouble("longitude", "lng") ?: point?.longitude ?: 0.0,
+            createdBy = item.firstString("createdBy", "created_by", "user_id").orEmpty(),
+            createdByUsername = item.firstString("nombre_de_usuario", "username"),
+            createdAt = item.firstString("createdAt", "created_at").orEmpty(),
+            status = item.firstString("junta_status", "status").orEmpty(),
+            region = item.firstString("region", "region_code")
+                ?: item.firstString("id")?.take(3)
+                ?: DEFAULT_COMMUNITY_REGION,
+            location = location,
+            photoFolderId = item.optString("photo_folder_id"),
+            images = communityImages(item, photos, "junta", parentId),
+            distanceKm = item.firstDouble("distance_km", "distanceKm"),
+            countryCode = item.firstString("country_code", "countryCode").orEmpty(),
+            administrativeArea = item.firstString(
+                "administrative_area", "administrativeArea"
+            ).orEmpty()
+        )
+    }
 
-    private fun chatFromJson(item: JSONObject) = UserChat(
-        id = item.firstString("id", "chat_id").orEmpty(),
-        type = runCatching {
-            ChatType.valueOf(item.optString("type", "SOCIAL").uppercase(Locale.ROOT))
-        }.getOrDefault(ChatType.SOCIAL),
-        participants = item.optJSONArray("participants").mapStrings(),
-        relatedEntityId = item.firstString("relatedEntityId", "related_entity_id"),
-        lastMessage = item.firstString("lastMessage", "last_message").orEmpty(),
-        messageCount = item.optInt("messageCount", item.optInt("message_count")),
-        version = item.optLong("version"),
-        updatedAt = item.firstString("updatedAt", "updated_at").orEmpty()
-    )
+    internal fun marketplaceFromJson(item: JSONObject): ProductPublication {
+        val location = item.optString("location")
+        val point = parseCommunityLocation(location)
+        val photos = item.optJSONArray("photos") ?: item.optJSONArray("images")
+        val productStatus = item.firstString("product_status", "condition").orEmpty()
+        val parentId = item.firstString("id", "post_id", "publication_id").orEmpty()
+        val creatorUsername = item.firstString("nombre_de_usuario", "username")
+        return ProductPublication(
+            id = parentId,
+            title = item.optString("title"),
+            description = item.optString("description"),
+            price = item.optString("price"),
+            category = item.optString("category"),
+            condition = productStatus,
+            seller = creatorUsername
+                ?: item.firstString("seller", "createdBy", "created_by", "user_id")
+                .orEmpty(),
+            mediaDescription = "",
+            latitude = item.firstDouble("latitude", "lat") ?: point?.latitude ?: 0.0,
+            longitude = item.firstDouble("longitude", "lng") ?: point?.longitude ?: 0.0,
+            images = communityImages(item, photos, "market", parentId),
+            createdBy = item.firstString("createdBy", "created_by", "user_id").orEmpty(),
+            createdAt = item.firstString("createdAt", "created_at").orEmpty(),
+            brand = item.optString("brand"),
+            model = item.optString("model"),
+            productType = item.firstString("productType", "product_type", "type").orEmpty(),
+            publicationStatus = item.firstString("publication_status", "status").orEmpty(),
+            productStatus = productStatus,
+            region = item.firstString("region", "region_code")
+                ?: item.firstString("id")?.take(3)
+                ?: DEFAULT_COMMUNITY_REGION,
+            location = location,
+            photoFolderId = item.optString("photo_folder_id"),
+            currencyCode = item.firstString("currency", "currency_code") ?: "CLP",
+            distanceKm = item.firstDouble("distance_km", "distanceKm"),
+            countryCode = item.firstString("country_code", "countryCode").orEmpty(),
+            administrativeArea = item.firstString(
+                "administrative_area", "administrativeArea"
+            ).orEmpty(),
+            createdByUsername = creatorUsername
+        )
+    }
 
-    private fun messageFromJson(item: JSONObject) = StoredMessage(
+    internal fun chatFromJson(item: JSONObject): UserChat {
+        val rawType = item.firstString("type", "chat_type")
+            .orEmpty()
+            .uppercase(Locale.ROOT)
+        val lastMessageObject = item.firstObject("lastMessage", "last_message")
+        val participants = item.firstArray("participants", "participant_ids")
+        return UserChat(
+            id = item.firstString("id", "chat_id").orEmpty(),
+            type = runCatching { ChatType.valueOf(rawType) }
+                .getOrDefault(ChatType.SOCIAL),
+            participants = participants.mapParticipantIds(),
+            relatedEntityId = item.firstString("relatedEntityId", "related_entity_id"),
+            lastMessage = lastMessageObject
+                ?.firstString("content", "message", "body", "text")
+                ?: item.firstString("lastMessage", "last_message").orEmpty(),
+            messageCount = item.firstInt("messageCount", "message_count", "total_messages")
+                ?: 0,
+            version = item.firstLongValue("version") ?: 0L,
+            updatedAt = item.firstString("updatedAt", "updated_at").orEmpty(),
+            title = item.firstString("title", "display_name").orEmpty(),
+            participantUsernames = participants.mapParticipantUsernames(),
+            lastMessageId = lastMessageObject
+                ?.firstString("id", "message_id")
+                ?: item.firstString("last_message_id").orEmpty(),
+            lastMessageSenderId = lastMessageObject?.firstString(
+                "senderId",
+                "sender_id",
+                "sender_user_id",
+                "user_id"
+            ).orEmpty(),
+            lastMessageSenderUsername = lastMessageObject?.firstString(
+                "sender_nombre_de_usuario",
+                "nombre_de_usuario",
+                "sender_username"
+            )
+        )
+    }
+
+    internal fun messageFromJson(item: JSONObject) = StoredMessage(
         id = item.firstString("id", "message_id").orEmpty(),
         chatId = item.firstString("chatId", "chat_id").orEmpty(),
-        senderId = item.firstString("senderId", "sender_id").orEmpty(),
-        content = item.optString("content"),
-        createdAt = item.firstString("createdAt", "created_at").orEmpty(),
-        localStatus = item.firstString("localStatus", "local_status")
+        senderId = item.firstString(
+            "senderId",
+            "sender_id",
+            "sender_user_id",
+            "user_id"
+        ).orEmpty(),
+        content = item.firstString("content", "message", "body", "text").orEmpty(),
+        createdAt = item.firstString("createdAt", "created_at", "sent_at").orEmpty(),
+        localStatus = item.firstString("localStatus", "local_status"),
+        senderUsername = item.firstString(
+            "sender_nombre_de_usuario",
+            "nombre_de_usuario",
+            "sender_username"
+        )
     )
+
+    private fun sportsPlatformFromJson(item: JSONObject): SyncPlatform {
+        val id = item.firstString("provider", "id", "platform").orEmpty()
+        return SyncPlatform(
+            id = id,
+            name = item.firstString("name", "display_name")
+                ?: id.replaceFirstChar(Char::uppercase),
+            description = item.optString("description"),
+            connected = item.optBoolean("connected", item.optString("status") == "connected"),
+            connectedAt = item.firstString("connected_at", "connectedAt").orEmpty()
+        )
+    }
 
     private fun photoSource(photoId: String, path: String): String {
         if (photoId.isNotBlank() && photoId != "null") {
@@ -793,16 +1671,39 @@ object RemoteConnections {
         }
     }
 
-    private fun JSONArray?.mapStrings(): List<String> {
+    private fun JSONArray?.mapParticipantIds(): List<String> {
         if (this == null) return emptyList()
         return buildList {
             for (index in 0 until length()) {
-                optString(index).takeIf { it.isNotBlank() && it != "null" }?.let(::add)
+                when (val value = opt(index)) {
+                    is String -> value.takeIf {
+                        it.isNotBlank() && it != "null"
+                    }?.let(::add)
+                    is JSONObject -> value.firstString(
+                        "user_id",
+                        "id",
+                        "participant_user_id"
+                    )?.let(::add)
+                }
+            }
+        }.distinct()
+    }
+
+    private fun JSONArray?.mapParticipantUsernames(): Map<String, String> {
+        if (this == null) return emptyMap()
+        return buildMap {
+            for (index in 0 until length()) {
+                val value = optJSONObject(index) ?: continue
+                val userId = value.firstString("user_id", "id", "participant_user_id")
+                    ?: continue
+                val username = value.firstString("nombre_de_usuario", "username")
+                    ?: continue
+                put(userId, username)
             }
         }
     }
 
-    private fun JSONArray?.mapMarketplaceImages(): List<String> {
+    private fun JSONArray?.mapCommunityImages(type: String, parentId: String): List<String> {
         if (this == null) return emptyList()
         return buildList {
             for (index in 0 until length()) {
@@ -813,12 +1714,29 @@ object RemoteConnections {
                         val photoId = raw.firstString("photo_id", "id")
                         val url = raw.firstString("url", "image_url", "path")
                         when {
-                            !photoId.isNullOrBlank() -> add("appbike-market-photo://$photoId")
+                            !photoId.isNullOrBlank() && parentId.isNotBlank() ->
+                                add("appbike-$type-photo://$parentId/$photoId")
                             !url.isNullOrBlank() -> add(publicPhotoUrl(url))
                         }
                     }
                 }
             }
+        }
+    }
+
+    private fun communityImages(
+        item: JSONObject,
+        photos: JSONArray?,
+        type: String,
+        parentId: String
+    ): List<String> {
+        val listed = photos.mapCommunityImages(type, parentId)
+        if (listed.isNotEmpty()) return listed
+        val photoId = item.firstString("photo_id", "cover_photo_id", "first_photo_id")
+        return if (!photoId.isNullOrBlank() && parentId.isNotBlank()) {
+            listOf("appbike-$type-photo://$parentId/$photoId")
+        } else {
+            emptyList()
         }
     }
 
@@ -845,10 +1763,51 @@ object RemoteConnections {
         return null
     }
 
+    private fun JSONObject.firstLongValue(vararg keys: String): Long? {
+        keys.forEach { key ->
+            if (!has(key) || isNull(key)) return@forEach
+            val parsed = when (val value = opt(key)) {
+                is Number -> value.toLong()
+                is String -> value.toLongOrNull()
+                else -> null
+            }
+            if (parsed != null && parsed >= 0L) return parsed
+        }
+        return null
+    }
+
+    private fun JSONObject.firstInt(vararg keys: String): Int? {
+        keys.forEach { key ->
+            if (!has(key) || isNull(key)) return@forEach
+            val parsed = when (val value = opt(key)) {
+                is Number -> value.toInt()
+                is String -> value.toIntOrNull()
+                else -> null
+            }
+            if (parsed != null && parsed >= 0) return parsed
+        }
+        return null
+    }
+
+    private fun JSONObject.firstDouble(vararg keys: String): Double? {
+        keys.forEach { key ->
+            if (!has(key) || isNull(key)) return@forEach
+            val parsed = when (val value = opt(key)) {
+                is Number -> value.toDouble()
+                is String -> value.toDoubleOrNull()
+                else -> null
+            }
+            if (parsed != null) return parsed
+        }
+        return null
+    }
+
     private fun JSONObject.firstString(vararg keys: String): String? {
         keys.forEach { key ->
             if (!has(key) || isNull(key)) return@forEach
-            val value = optString(key).trim()
+            val raw = opt(key)
+            if (raw is JSONObject || raw is JSONArray) return@forEach
+            val value = raw?.toString()?.trim().orEmpty()
             if (value.isNotEmpty() && value != "null") return value
         }
         return null

@@ -3,37 +3,108 @@ package com.example.appbike
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.abs
 
 object LocalDataStore {
     private const val PREFS = "appbike_local_data"
     private const val LOCATION = "selected_location"
+    private const val MARKETPLACE_LOCATION = "marketplace_location"
+    private const val LOCATION_HISTORY = "location_history"
+    private const val LOCATION_HISTORY_LIMIT = 8
     private const val CHATS = "chats"
     private const val MESSAGES = "messages"
     private const val SYNC = "chat_sync"
+    private const val NOTIFICATION_SYNC = "chat_notification_sync"
 
-    fun loadLocation(context: Context): GeoPoint? {
-        val raw = prefs(context).getString(LOCATION, null) ?: return null
+    fun loadLocation(context: Context): GeoPoint? = loadGeoPoint(context, LOCATION)
+
+    fun saveLocation(context: Context, point: GeoPoint) {
+        val previousLocations = loadLocationHistory(context)
+        saveGeoPoint(context, LOCATION, point)
+        rememberLocation(context, point, previousLocations)
+    }
+
+    fun loadMarketplaceLocation(context: Context): GeoPoint? =
+        loadGeoPoint(context, MARKETPLACE_LOCATION)
+
+    fun saveMarketplaceLocation(context: Context, point: GeoPoint) {
+        val previousLocations = loadLocationHistory(context)
+        saveGeoPoint(context, MARKETPLACE_LOCATION, point)
+        rememberLocation(context, point, previousLocations)
+    }
+
+    fun loadLocationHistory(context: Context): List<GeoPoint> {
+        val persisted = readArray(context, LOCATION_HISTORY).mapNotNull(::geoPointFromJson)
+        return distinctLocations(
+            persisted + listOfNotNull(
+                loadMarketplaceLocation(context),
+                loadLocation(context)
+            )
+        ).take(LOCATION_HISTORY_LIMIT)
+    }
+
+    private fun loadGeoPoint(context: Context, key: String): GeoPoint? {
+        val raw = prefs(context).getString(key, null) ?: return null
         return runCatching {
-            JSONObject(raw).let {
-                GeoPoint(
-                    latitude = it.getDouble("latitude"),
-                    longitude = it.getDouble("longitude"),
-                    label = it.optString("label")
-                )
-            }
+            geoPointFromJson(JSONObject(raw))
         }.getOrNull()
     }
 
-    fun saveLocation(context: Context, point: GeoPoint) {
+    private fun saveGeoPoint(context: Context, key: String, point: GeoPoint) {
         prefs(context).edit().putString(
-            LOCATION,
-            JSONObject()
-                .put("latitude", point.latitude)
-                .put("longitude", point.longitude)
-                .put("label", point.label)
-                .toString()
+            key,
+            geoPointToJson(point).toString()
         ).apply()
     }
+
+    private fun rememberLocation(
+        context: Context,
+        point: GeoPoint,
+        previousLocations: List<GeoPoint>
+    ) {
+        writeArray(
+            context,
+            LOCATION_HISTORY,
+            mergeLocationHistory(point, previousLocations).map(::geoPointToJson)
+        )
+    }
+
+    internal fun mergeLocationHistory(
+        selected: GeoPoint,
+        previousLocations: List<GeoPoint>
+    ): List<GeoPoint> = distinctLocations(listOf(selected) + previousLocations)
+        .take(LOCATION_HISTORY_LIMIT)
+
+    private fun distinctLocations(points: List<GeoPoint>): List<GeoPoint> = buildList {
+        points.forEach { point ->
+            if (none { it.sameCoordinates(point) }) add(point)
+        }
+    }
+
+    private fun GeoPoint.sameCoordinates(other: GeoPoint): Boolean =
+        abs(latitude - other.latitude) < 0.00001 &&
+            abs(longitude - other.longitude) < 0.00001
+
+    private fun geoPointFromJson(item: JSONObject): GeoPoint? = runCatching {
+        GeoPoint(
+            latitude = item.getDouble("latitude"),
+            longitude = item.getDouble("longitude"),
+            label = item.optString("label"),
+            countryCode = item.optString("countryCode"),
+            administrativeArea = item.optString("administrativeArea"),
+            regionCode = item.optString("regionCode"),
+            currencyCode = item.optString("currencyCode")
+        )
+    }.getOrNull()
+
+    private fun geoPointToJson(point: GeoPoint) = JSONObject()
+        .put("latitude", point.latitude)
+        .put("longitude", point.longitude)
+        .put("label", point.label)
+        .put("countryCode", point.countryCode)
+        .put("administrativeArea", point.administrativeArea)
+        .put("regionCode", point.regionCode)
+        .put("currencyCode", point.currencyCode)
 
     fun loadChats(context: Context, userId: String): List<UserChat> =
         readArray(context, "$CHATS:$userId").mapNotNull { item ->
@@ -46,7 +117,15 @@ object LocalDataStore {
                     lastMessage = item.optString("lastMessage"),
                     messageCount = item.optInt("messageCount"),
                     version = item.optLong("version"),
-                    updatedAt = item.optString("updatedAt")
+                    updatedAt = item.optString("updatedAt"),
+                    title = item.optString("title"),
+                    participantUsernames = item.optJSONObject("participantUsernames")
+                        .stringMap(),
+                    lastMessageId = item.optString("lastMessageId"),
+                    lastMessageSenderId = item.optString("lastMessageSenderId"),
+                    lastMessageSenderUsername = item.optString(
+                        "lastMessageSenderUsername"
+                    ).ifBlank { null }
                 )
             }.getOrNull()
         }
@@ -62,6 +141,11 @@ object LocalDataStore {
                 .put("messageCount", chat.messageCount)
                 .put("version", chat.version)
                 .put("updatedAt", chat.updatedAt)
+                .put("title", chat.title)
+                .put("participantUsernames", JSONObject(chat.participantUsernames))
+                .put("lastMessageId", chat.lastMessageId)
+                .put("lastMessageSenderId", chat.lastMessageSenderId)
+                .put("lastMessageSenderUsername", chat.lastMessageSenderUsername)
         })
     }
 
@@ -74,7 +158,8 @@ object LocalDataStore {
                     senderId = item.getString("senderId"),
                     content = item.getString("content"),
                     createdAt = item.getString("createdAt"),
-                    localStatus = item.optString("localStatus").ifBlank { null }
+                    localStatus = item.optString("localStatus").ifBlank { null },
+                    senderUsername = item.optString("senderUsername").ifBlank { null }
                 )
             }.getOrNull()
         }
@@ -93,6 +178,7 @@ object LocalDataStore {
                 .put("content", message.content)
                 .put("createdAt", message.createdAt)
                 .put("localStatus", message.localStatus)
+                .put("senderUsername", message.senderUsername)
         })
     }
 
@@ -119,6 +205,42 @@ object LocalDataStore {
                 .put("messageCount", metadata.messageCount)
                 .put("version", metadata.version)
                 .put("lastSync", metadata.lastSync)
+                .toString()
+        ).apply()
+    }
+
+    fun loadNotificationSync(
+        context: Context,
+        userId: String,
+        chatId: String
+    ): ChatNotificationSyncMetadata? {
+        val raw = prefs(context).getString(
+            "$NOTIFICATION_SYNC:$userId:$chatId",
+            null
+        ) ?: return null
+        return runCatching {
+            JSONObject(raw).let {
+                ChatNotificationSyncMetadata(
+                    chatId = chatId,
+                    lastMessageId = it.optString("lastMessageId"),
+                    messageCount = it.optInt("messageCount"),
+                    version = it.optLong("version")
+                )
+            }
+        }.getOrNull()
+    }
+
+    fun saveNotificationSync(
+        context: Context,
+        userId: String,
+        metadata: ChatNotificationSyncMetadata
+    ) {
+        prefs(context).edit().putString(
+            "$NOTIFICATION_SYNC:$userId:${metadata.chatId}",
+            JSONObject()
+                .put("lastMessageId", metadata.lastMessageId)
+                .put("messageCount", metadata.messageCount)
+                .put("version", metadata.version)
                 .toString()
         ).apply()
     }
@@ -150,4 +272,22 @@ object LocalDataStore {
             }
         }
     }
+
+    private fun JSONObject?.stringMap(): Map<String, String> {
+        if (this == null) return emptyMap()
+        return buildMap {
+            keys().forEach { key ->
+                optString(key).takeIf { it.isNotBlank() && it != "null" }?.let {
+                    put(key, it)
+                }
+            }
+        }
+    }
 }
+
+internal fun mergeStoredMessages(
+    local: List<StoredMessage>,
+    downloaded: List<StoredMessage>
+): List<StoredMessage> = (local + downloaded)
+    .distinctBy(StoredMessage::id)
+    .sortedWith(compareBy<StoredMessage> { it.createdAt }.thenBy { it.id })

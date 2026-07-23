@@ -8,6 +8,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,7 +21,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -29,12 +36,20 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -42,6 +57,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -57,45 +73,180 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.URL
 
+private val MARKETPLACE_STATUSES = listOf(
+    "activa" to "Activas",
+    "pausada" to "Pausadas",
+    "vendida" to "Vendidas",
+    "en_revision" to "En revisión"
+)
+private const val MARKETPLACE_LOADING_MIN_MS = 450L
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MarketplaceScreen(account: AccountSession?) {
+fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val posts = remember { mutableStateListOf<ProductPublication>() }
+    var location by remember {
+        mutableStateOf(
+            LocalDataStore.loadMarketplaceLocation(context)
+                ?: LocalDataStore.loadLocation(context)
+        )
+    }
     var query by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
+    var pullRefreshing by remember { mutableStateOf(false) }
+    var refreshRequestId by remember { mutableStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
     var showCreate by remember { mutableStateOf(false) }
-    val location = LocalDataStore.loadLocation(context)
+    var showLocationPicker by remember { mutableStateOf(false) }
+    var detail by remember { mutableStateOf<ProductPublication?>(null) }
+    var detailLoading by remember { mutableStateOf(false) }
+    var detailError by remember { mutableStateOf<String?>(null) }
 
-    fun refresh() {
+    fun refresh(fromPull: Boolean = false) {
         val center = location ?: run {
-            error = "Define primero tu ubicación desde Mapas."
+            error = "Elige una ubicación para Marketplace."
             return
         }
+        val requestedQuery = query
+        val requestId = refreshRequestId + 1
+        refreshRequestId = requestId
         scope.launch {
-            loading = true
+            loading = !fromPull
+            pullRefreshing = fromPull
             error = null
-            runCatching {
+            val startedAt = System.nanoTime()
+            val result = runCatching {
                 withContext(Dispatchers.IO) {
-                    RemoteConnections.loadMarketplacePosts(center, query, 40)
+                    RemoteConnections.loadMarketplacePosts(
+                        center = center,
+                        query = requestedQuery,
+                        radiusKm = 40,
+                        status = "activa"
+                    )
                 }
-            }.onSuccess {
+            }
+            val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L
+            if (elapsedMs < MARKETPLACE_LOADING_MIN_MS) {
+                delay(MARKETPLACE_LOADING_MIN_MS - elapsedMs)
+            }
+            if (requestId != refreshRequestId) return@launch
+            result.onSuccess {
                 posts.clear()
                 posts.addAll(it)
             }.onFailure { error = RemoteConnections.userFriendlyError(it) }
             loading = false
+            pullRefreshing = false
         }
     }
 
-    LaunchedEffect(location) { if (location != null) refresh() }
+    fun openDetail(publicationId: String) {
+        scope.launch {
+            detail = null
+            detailLoading = true
+            detailError = null
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    RemoteConnections.loadMarketplaceDetails(publicationId)
+                }
+            }.onSuccess { detail = it }
+                .onFailure {
+                    detailError = RemoteConnections.userFriendlyError(it)
+                    error = detailError
+                }
+            detailLoading = false
+        }
+    }
+
+    fun changeStatus(publicationId: String, status: String) {
+        scope.launch {
+            detailLoading = true
+            detailError = null
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    RemoteConnections.updateMarketplaceStatus(
+                        account?.userId ?: throw IllegalStateException("Inicia sesión."),
+                        publicationId,
+                        status
+                    )
+                }
+            }.onSuccess {
+                detail = it
+                refresh()
+            }.onFailure { detailError = RemoteConnections.userFriendlyError(it) }
+            detailLoading = false
+        }
+    }
+
+    fun addPhoto(publicationId: String, imageUri: String) {
+        scope.launch {
+            detailLoading = true
+            detailError = null
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    RemoteConnections.uploadMarketplacePhoto(
+                        context,
+                        account?.userId ?: throw IllegalStateException("Inicia sesión."),
+                        publicationId,
+                        imageUri
+                    )
+                    RemoteConnections.loadMarketplaceDetails(publicationId)
+                }
+            }.onSuccess {
+                detail = it
+                refresh()
+            }.onFailure { detailError = RemoteConnections.userFriendlyError(it) }
+            detailLoading = false
+        }
+    }
+
+    fun contactSeller(publication: ProductPublication) {
+        val session = account ?: run {
+            detailError = "Inicia sesión para contactar al vendedor."
+            return
+        }
+        scope.launch {
+            detailLoading = true
+            detailError = null
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    RemoteConnections.getOrCreateChat(
+                        userId = session.userId,
+                        relatedUserId = publication.createdBy,
+                        type = ChatType.MARKETPLACE,
+                        relatedEntityId = publication.id,
+                        title = publication.title
+                    )
+                }
+            }.onSuccess(onOpenChat)
+                .onFailure { detailError = RemoteConnections.userFriendlyError(it) }
+            detailLoading = false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (LocalDataStore.loadMarketplaceLocation(context) == null) {
+            location?.let { LocalDataStore.saveMarketplaceLocation(context, it) }
+        }
+    }
+
+    LaunchedEffect(location) {
+        if (location != null) refresh()
+    }
+
+    val currency = marketplaceCurrencyFor(location)
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 8.dp)) {
@@ -106,7 +257,7 @@ fun MarketplaceScreen(account: AccountSession?) {
                 placeholder = { Text("Buscar en Marketplace") },
                 leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
                 trailingIcon = {
-                    IconButton(onClick = ::refresh) {
+                    IconButton(onClick = { refresh() }, enabled = !loading) {
                         Icon(Icons.Outlined.Search, contentDescription = "Buscar")
                     }
                 },
@@ -115,42 +266,77 @@ fun MarketplaceScreen(account: AccountSession?) {
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { refresh() })
             )
-            Text(
-                "Publicaciones a 40 km",
-                modifier = Modifier.padding(vertical = 10.dp),
-                style = MaterialTheme.typography.titleLarge
-            )
 
-            when {
-                loading && posts.isEmpty() -> Box(
-                    Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) { CircularProgressIndicator() }
+            OutlinedButton(
+                onClick = { showLocationPicker = true },
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Icon(Icons.Outlined.LocationOn, contentDescription = null)
+                Text(
+                    text = location?.let {
+                        "Marketplace en ${marketplaceLocationLabel(it)} · ${currency.code}"
+                    } ?: "Elegir ubicación de Marketplace",
+                    modifier = Modifier.padding(start = 8.dp).weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
 
-                posts.isEmpty() -> Box(
-                    Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        error ?: "No hay publicaciones disponibles en esta zona.",
-                        color = if (error == null) {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        } else {
-                            MaterialTheme.colorScheme.error
+            error?.let {
+                Text(
+                    it,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+
+            PullToRefreshBox(
+                isRefreshing = pullRefreshing,
+                onRefresh = { refresh(fromPull = true) },
+                modifier = Modifier.weight(1f).fillMaxWidth()
+            ) {
+                when {
+                    posts.isEmpty() && !loading -> Box(
+                        Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            if (location == null) {
+                                "Elige una ubicación para Marketplace."
+                            } else {
+                                "No hay publicaciones disponibles en esta ubicación."
+                            },
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    posts.isNotEmpty() -> LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(posts, key = { it.id }) { post ->
+                            MarketplaceCard(post) { openDetail(post.id) }
                         }
-                    )
-                }
-
-                else -> LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(posts, key = { it.id.ifBlank { "${it.title}:${it.createdAt}" } }) {
-                        MarketplaceCard(it)
                     }
                 }
+            }
+        }
+
+        if (loading) {
+            Surface(
+                modifier = Modifier.align(Alignment.Center),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 8.dp
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.padding(16.dp).size(36.dp),
+                    strokeWidth = 3.dp
+                )
             }
         }
 
@@ -160,67 +346,146 @@ fun MarketplaceScreen(account: AccountSession?) {
             onClick = {
                 when {
                     account == null -> error = "Inicia sesión para publicar."
-                    location == null -> error = "Define primero tu ubicación desde Mapas."
+                    location == null -> error = "Elige una ubicación para Marketplace."
                     else -> showCreate = true
                 }
             }
         ) {
             Icon(Icons.Outlined.Add, contentDescription = "Crear publicación")
         }
+
+        if (detailLoading && detail == null) {
+            Surface(
+                modifier = Modifier.align(Alignment.Center),
+                shape = CircleShape,
+                shadowElevation = 8.dp
+            ) {
+                CircularProgressIndicator(Modifier.padding(16.dp))
+            }
+        }
+
+        if (showLocationPicker) {
+            LocationSearchDialog(
+                initial = location?.label.orEmpty(),
+                message = "Esta ubicación se usará solo en Marketplace y no cambiará la de Juntas.",
+                onDismiss = { showLocationPicker = false },
+                onLocation = { point ->
+                    location = point
+                    LocalDataStore.saveMarketplaceLocation(context, point)
+                    showLocationPicker = false
+                    error = null
+                    scope.launch {
+                        val resolved = withContext(Dispatchers.IO) {
+                            RemoteConnections.resolveCommunityLocation(point)
+                        }
+                        if (resolved != point) {
+                            location = resolved
+                            LocalDataStore.saveMarketplaceLocation(context, resolved)
+                        }
+                    }
+                }
+            )
+        }
     }
 
-    if (showCreate && account != null && location != null) {
+    val publicationLocation = location
+    if (showCreate && account != null && publicationLocation != null) {
         CreateMarketplaceDialog(
+            currency = currency,
             onDismiss = { showCreate = false },
             onCreate = { post ->
                 scope.launch {
                     loading = true
+                    error = null
                     runCatching {
                         withContext(Dispatchers.IO) {
+                            val region = RemoteConnections.communityRegionFor(publicationLocation)
                             RemoteConnections.createMarketplacePost(
                                 context,
                                 post.copy(
-                                    latitude = location.latitude,
-                                    longitude = location.longitude,
+                                    latitude = publicationLocation.latitude,
+                                    longitude = publicationLocation.longitude,
                                     createdBy = account.userId,
-                                    seller = account.email
+                                    seller = account.username ?: account.email,
+                                    createdByUsername = account.username,
+                                    region = region,
+                                    location = publicationLocation.label,
+                                    currencyCode = currency.code,
+                                    countryCode = publicationLocation.countryCode,
+                                    administrativeArea = publicationLocation.administrativeArea
                                 )
                             )
                         }
                     }.onSuccess {
                         showCreate = false
                         refresh()
+                        detail = it
                     }.onFailure { error = RemoteConnections.userFriendlyError(it) }
                     loading = false
                 }
             }
         )
     }
+
+    detail?.let { publication ->
+        MarketplaceDetailScreen(
+            publication = publication,
+            currency = marketplaceCurrency(publication.currencyCode),
+            account = account,
+            loading = detailLoading,
+            error = detailError,
+            onDismiss = {
+                detail = null
+                detailError = null
+            },
+            onStatus = { changeStatus(publication.id, it) },
+            onAddPhoto = { addPhoto(publication.id, it) },
+            onContact = { contactSeller(publication) }
+        )
+    }
+
 }
 
 @Composable
-private fun MarketplaceCard(post: ProductPublication) {
+private fun MarketplaceCard(
+    post: ProductPublication,
+    onClick: () -> Unit
+) {
     Surface(
+        modifier = Modifier.clickable(onClick = onClick),
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 2.dp
     ) {
         Column {
-            MarketplaceRemoteImage(post.images.firstOrNull())
+            MarketplaceRemoteImage(
+                url = post.images.firstOrNull(),
+                publicationId = post.id
+            )
             Column(
                 Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(post.title, fontWeight = FontWeight.Bold, maxLines = 2)
                 Text(
-                    listOf(post.brand, post.model)
-                        .filter(String::isNotBlank)
-                        .joinToString(" "),
-                    style = MaterialTheme.typography.bodySmall
+                    publicationSellerName(post),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
+                if (post.productStatus.isNotBlank()) {
+                    Text(
+                        post.productStatus.replaceFirstChar(Char::uppercase),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
                 if (post.price.isNotBlank()) {
                     Text(
-                        post.price,
+                        formatMarketplacePrice(
+                            post.price,
+                            marketplaceCurrency(post.currencyCode)
+                        ),
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold
                     )
@@ -228,6 +493,7 @@ private fun MarketplaceCard(post: ProductPublication) {
                 Text(
                     post.description,
                     maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -237,40 +503,313 @@ private fun MarketplaceCard(post: ProductPublication) {
 }
 
 @Composable
-private fun MarketplaceRemoteImage(url: String?) {
-    var bytes by remember(url) { mutableStateOf<ByteArray?>(null) }
-    LaunchedEffect(url) {
-        if (!url.isNullOrBlank()) {
-            bytes = runCatching {
-                withContext(Dispatchers.IO) {
-                    if (url.startsWith("appbike-market-photo://")) {
-                        RemoteConnections.loadMarketplacePhoto(
-                            url.removePrefix("appbike-market-photo://")
-                        )
-                    } else {
-                        URL(url).readBytes()
-                    }
-                }
-            }.getOrNull()
+private fun MarketplaceDetailScreen(
+    publication: ProductPublication,
+    currency: MarketplaceCurrency,
+    account: AccountSession?,
+    loading: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onStatus: (String) -> Unit,
+    onAddPhoto: (String) -> Unit,
+    onContact: () -> Unit
+) {
+    val context = LocalContext.current
+    val isOwner = account?.userId == publication.createdBy
+    var selectedPhoto by remember(publication.id, publication.images) { mutableStateOf(0) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            onAddPhoto(uri.toString())
         }
     }
-    val bitmap = remember(bytes) {
-        bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp)
+                        .padding(horizontal = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.ArrowBack,
+                            contentDescription = "Volver a Marketplace"
+                        )
+                    }
+                    Text(
+                        "Marketplace",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (loading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp
+                        )
+                    }
+                }
+                HorizontalDivider()
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    MarketplaceRemoteImage(
+                        url = publication.images.getOrNull(selectedPhoto),
+                        publicationId = publication.id,
+                        modifier = Modifier.fillMaxWidth().height(340.dp)
+                    )
+
+                    if (publication.images.size > 1) {
+                        LazyRow(
+                            modifier = Modifier.padding(top = 12.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                horizontal = 18.dp
+                            ),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(publication.images.size) { index ->
+                                MarketplaceRemoteImage(
+                                    url = publication.images[index],
+                                    publicationId = publication.id,
+                                    modifier = Modifier
+                                        .size(86.dp, 64.dp)
+                                        .border(
+                                            width = if (selectedPhoto == index) 3.dp else 1.dp,
+                                            color = if (selectedPhoto == index) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.outlineVariant
+                                            },
+                                            shape = RoundedCornerShape(12.dp)
+                                        )
+                                        .clickable { selectedPhoto = index }
+                                )
+                            }
+                        }
+                    }
+
+                    Column(
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Text(
+                            formatMarketplacePrice(publication.price, currency),
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                        Text(
+                            publication.title,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "Vende ${publicationSellerName(publication)}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = MaterialTheme.colorScheme.primaryContainer
+                            ) {
+                                Text(
+                                    publication.productStatus
+                                        .ifBlank { publication.condition }
+                                        .replaceFirstChar(Char::uppercase),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = MaterialTheme.colorScheme.surfaceContainerHighest
+                            ) {
+                                Text(
+                                    marketplaceStatusLabel(publication.publicationStatus),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            }
+                        }
+
+                        HorizontalDivider()
+                        Text(
+                            "Descripción",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            publication.description,
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+
+                        if (publication.location.isNotBlank()) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                Icon(
+                                    Icons.Outlined.LocationOn,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Column {
+                                    Text("Ubicación", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        publication.location.substringAfter(
+                                            '|',
+                                            publication.location
+                                        ),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+
+                        if (publication.createdAt.isNotBlank()) {
+                            Text(
+                                "Publicada el ${marketplacePublishedLabel(publication.createdAt)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        error?.let {
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Text(
+                                    it,
+                                    modifier = Modifier.padding(12.dp),
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            }
+                        }
+
+                        if (isOwner) {
+                            HorizontalDivider()
+                            Text(
+                                "Administrar publicación",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                MARKETPLACE_STATUSES.forEach { (status, label) ->
+                                    FilterChip(
+                                        selected = publication.publicationStatus == status,
+                                        enabled = !loading,
+                                        onClick = { onStatus(status) },
+                                        label = { Text(label) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 12.dp
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        if (isOwner) {
+                            OutlinedButton(
+                                modifier = Modifier.weight(1f).height(50.dp),
+                                enabled = !loading,
+                                onClick = {
+                                    picker.launch(
+                                        arrayOf("image/jpeg", "image/png", "image/webp")
+                                    )
+                                }
+                            ) { Text("Agregar fotografía") }
+                        } else {
+                            Button(
+                                modifier = Modifier.weight(1f).height(50.dp),
+                                enabled = !loading && account != null,
+                                onClick = onContact
+                            ) {
+                                Text(
+                                    if (account == null) {
+                                        "Inicia sesión para contactar"
+                                    } else {
+                                        "Contactar al vendedor"
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
-    ProductImage(bitmap)
+}
+
+@Composable
+private fun MarketplaceRemoteImage(
+    url: String?,
+    publicationId: String = "",
+    modifier: Modifier = Modifier.fillMaxWidth().aspectRatio(1.55f)
+) {
+    var bitmap by remember(url, publicationId) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(url, publicationId) {
+        bitmap = runCatching {
+            withContext(Dispatchers.IO) {
+                url?.takeIf(String::isNotBlank)?.let(RemoteImageLoader::loadBitmap)
+            }
+        }.getOrNull()
+    }
+    ProductImage(bitmap, modifier)
 }
 
 @Composable
 private fun CreateMarketplaceDialog(
+    currency: MarketplaceCurrency,
     onDismiss: () -> Unit,
     onCreate: (ProductPublication) -> Unit
 ) {
     var title by remember { mutableStateOf("") }
-    var brand by remember { mutableStateOf("") }
-    var model by remember { mutableStateOf("") }
-    var productType by remember { mutableStateOf("") }
+    var productStatus by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
-    var price by remember { mutableStateOf("") }
+    var priceDigits by remember { mutableStateOf("") }
     var imageUri by remember { mutableStateOf("") }
     val context = LocalContext.current
     val imagePicker = rememberLauncherForActivityResult(
@@ -298,12 +837,29 @@ private fun CreateMarketplaceDialog(
             ) {
                 Text("Crear publicación", style = MaterialTheme.typography.headlineMedium)
                 AppInput("Nombre del producto", title) { title = it }
-                AppInput("Marca", brand) { brand = it }
-                AppInput("Modelo", model) { model = it }
-                AppInput("Tipo: bicicleta, repuesto, accesorio", productType) {
-                    productType = it
-                }
-                AppInput("Precio", price) { price = it }
+                ProductStatusSelector(
+                    selectedStatus = productStatus,
+                    onStatusSelected = { productStatus = it }
+                )
+                OutlinedTextField(
+                    value = priceDigits,
+                    onValueChange = { priceDigits = normalizeWholeUnitInput(it) },
+                    label = { Text("Precio (${currency.code})") },
+                    supportingText = { Text(currency.name.replaceFirstChar(Char::uppercase)) },
+                    prefix = {
+                        Text(
+                            currency.symbol,
+                            fontWeight = FontWeight.Bold
+                        )
+                    },
+                    visualTransformation = WholeUnitPriceVisualTransformation(
+                        currency.thousandsSeparator
+                    ),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp)
+                )
                 OutlinedTextField(
                     value = description,
                     onValueChange = { description = it },
@@ -330,29 +886,70 @@ private fun CreateMarketplaceDialog(
                 ) {
                     OutlinedButton(onClick = onDismiss) { Text("Cancelar") }
                     Button(
-                        enabled = title.isNotBlank() && brand.isNotBlank() &&
-                            model.isNotBlank() && productType.isNotBlank() &&
-                            price.isNotBlank() && description.isNotBlank() &&
-                            imageUri.isNotBlank(),
+                        enabled = title.isNotBlank() && productStatus.isNotBlank() &&
+                            priceDigits.toLongOrNull()?.let { it > 0L } == true &&
+                            description.isNotBlank(),
                         onClick = {
                             onCreate(
                                 ProductPublication(
                                     title = title,
-                                    price = price,
-                                    category = productType,
-                                    condition = "",
+                                    price = priceDigits,
+                                    category = "",
+                                    condition = productStatus,
                                     seller = "",
                                     description = description,
                                     mediaDescription = "",
-                                    brand = brand,
-                                    model = model,
-                                    productType = productType,
+                                    productStatus = productStatus,
+                                    publicationStatus = "activa",
                                     imageUri = imageUri
                                 )
                             )
                         }
                     ) { Text("Publicar") }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ProductStatusSelector(
+    selectedStatus: String,
+    onStatusSelected: (String) -> Unit
+) {
+    val options = listOf(
+        "nuevo" to "Nuevo",
+        "usado" to "Usado",
+        "reacondicionado" to "Reacondicionado"
+    )
+    var expanded by remember { mutableStateOf(false) }
+
+    Box(Modifier.fillMaxWidth()) {
+        OutlinedButton(
+            onClick = { expanded = true },
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Text(
+                text = options.firstOrNull { it.first == selectedStatus }?.second
+                    ?: "Selecciona el estado del producto",
+                modifier = Modifier.weight(1f)
+            )
+            Icon(Icons.Outlined.ArrowDropDown, contentDescription = null)
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.fillMaxWidth(0.82f)
+        ) {
+            options.forEach { (value, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = {
+                        onStatusSelected(value)
+                        expanded = false
+                    }
+                )
             }
         }
     }
@@ -377,23 +974,23 @@ private fun MarketplaceLocalImage(imageUri: String) {
 }
 
 @Composable
-private fun ProductImage(bitmap: Bitmap?) {
+private fun ProductImage(
+    bitmap: Bitmap?,
+    modifier: Modifier = Modifier.fillMaxWidth().aspectRatio(1.55f)
+) {
     if (bitmap != null) {
         Image(
             bitmap = bitmap.asImageBitmap(),
             contentDescription = "Fotografía del producto",
-            modifier = Modifier.fillMaxWidth().aspectRatio(1.55f),
+            modifier = modifier,
             contentScale = ContentScale.Crop
         )
     } else {
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1.55f)
-                .background(
-                    MaterialTheme.colorScheme.surfaceContainer,
-                    RoundedCornerShape(20.dp)
-                ),
+            modifier = modifier.background(
+                MaterialTheme.colorScheme.surfaceContainer,
+                RoundedCornerShape(20.dp)
+            ),
             contentAlignment = Alignment.Center
         ) {
             Icon(
@@ -404,3 +1001,35 @@ private fun ProductImage(bitmap: Bitmap?) {
         }
     }
 }
+
+private fun marketplaceStatusLabel(status: String): String =
+    MARKETPLACE_STATUSES.firstOrNull { it.first == status }?.second
+        ?: status.replace('_', ' ').replaceFirstChar(Char::uppercase)
+
+private fun marketplacePublishedLabel(raw: String): String {
+    val match = Regex(
+        """^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})"""
+    ).find(raw.trim()) ?: return raw
+    val (year, month, day, hour, minute) = match.destructured
+    return "$day/$month/$year · $hour:$minute"
+}
+
+private fun marketplaceLocationLabel(point: GeoPoint): String = point.label
+    .substringBefore(',')
+    .trim()
+    .ifBlank {
+        String.format(
+            java.util.Locale.US,
+            "%.5f, %.5f",
+            point.latitude,
+            point.longitude
+        )
+    }
+
+private fun publicationSellerName(publication: ProductPublication): String =
+    publication.createdByUsername
+        ?.takeIf(String::isNotBlank)
+        ?: publication.seller.takeIf {
+            it.isNotBlank() && !isValidAccountUserId(it)
+        }
+        ?: "Usuario de APPBIKE"

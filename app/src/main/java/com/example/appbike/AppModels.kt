@@ -13,13 +13,9 @@ enum class AppScreen {
 
 data class AccountSession(
     val userId: String,
-    val email: String
-)
-
-data class AppFeature(
-    val title: String,
-    val description: String,
-    val screen: AppScreen
+    val email: String,
+    val accessToken: String = "",
+    val username: String? = null
 )
 
 data class Bike(
@@ -55,7 +51,17 @@ data class ProductPublication(
     val brand: String = "",
     val model: String = "",
     val productType: String = "",
-    val imageUri: String = ""
+    val imageUri: String = "",
+    val publicationStatus: String = "activa",
+    val productStatus: String = "",
+    val region: String = "LAS",
+    val location: String = "",
+    val photoFolderId: String = "",
+    val currencyCode: String = "CLP",
+    val distanceKm: Double? = null,
+    val countryCode: String = "",
+    val administrativeArea: String = "",
+    val createdByUsername: String? = null
 )
 
 data class MaintenanceReminder(
@@ -82,38 +88,14 @@ data class BikeMaintenanceData(
     val future: List<ServiceBooking>
 )
 
-data class RoutePost(
-    val name: String,
-    val zone: String,
-    val startPoint: String,
-    val endPoint: String,
-    val distanceKm: String,
-    val estimatedTime: String,
-    val difficulty: String,
-    val safetyNote: String
-)
-
-data class RideMeetup(
-    val title: String,
-    val routeName: String,
-    val meetingPoint: String,
-    val dateTime: String,
-    val organizer: String,
-    val level: String,
-    val maxRiders: String,
-    val notes: String,
-    val participants: List<String> = emptyList()
-)
-
-data class ChatMessage(
-    val sender: String,
-    val message: String
-)
-
 data class GeoPoint(
     val latitude: Double,
     val longitude: Double,
-    val label: String = ""
+    val label: String = "",
+    val countryCode: String = "",
+    val administrativeArea: String = "",
+    val regionCode: String = "",
+    val currencyCode: String = ""
 )
 
 data class MeetupEvent(
@@ -124,7 +106,17 @@ data class MeetupEvent(
     val latitude: Double,
     val longitude: Double,
     val createdBy: String,
-    val createdAt: String = ""
+    val createdAt: String = "",
+    val status: String = "activa",
+    val region: String = "LAS",
+    val location: String = "",
+    val photoFolderId: String = "",
+    val images: List<String> = emptyList(),
+    val imageUri: String = "",
+    val distanceKm: Double? = null,
+    val countryCode: String = "",
+    val administrativeArea: String = "",
+    val createdByUsername: String? = null
 )
 
 enum class ChatType { SOCIAL, MARKETPLACE }
@@ -137,7 +129,12 @@ data class UserChat(
     val lastMessage: String = "",
     val messageCount: Int = 0,
     val version: Long = 0,
-    val updatedAt: String = ""
+    val updatedAt: String = "",
+    val title: String = "",
+    val participantUsernames: Map<String, String> = emptyMap(),
+    val lastMessageId: String = "",
+    val lastMessageSenderId: String = "",
+    val lastMessageSenderUsername: String? = null
 )
 
 data class StoredMessage(
@@ -146,7 +143,15 @@ data class StoredMessage(
     val senderId: String,
     val content: String,
     val createdAt: String,
-    val localStatus: String? = null
+    val localStatus: String? = null,
+    val senderUsername: String? = null
+)
+
+data class ChatMessagePage(
+    val messages: List<StoredMessage>,
+    val messageCount: Int,
+    val version: Long,
+    val hasMore: Boolean
 )
 
 data class ChatSyncMetadata(
@@ -157,8 +162,30 @@ data class ChatSyncMetadata(
     val lastSync: Long = 0
 )
 
+data class ChatNotificationSyncMetadata(
+    val chatId: String,
+    val lastMessageId: String = "",
+    val messageCount: Int = 0,
+    val version: Long = 0
+)
+
 data class SyncPlatform(
+    val id: String,
     val name: String,
     val description: String,
-    val connected: Boolean
+    val connected: Boolean,
+    val connectedAt: String = ""
+)
+
+data class SportsOAuthStart(
+    val provider: String,
+    val authorizationUrl: String,
+    val state: String
+)
+
+data class SportsOAuthCallback(
+    val provider: String,
+    val code: String,
+    val state: String,
+    val error: String = ""
 )

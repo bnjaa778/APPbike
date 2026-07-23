@@ -8,23 +8,30 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.DirectionsBike
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Storefront
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,28 +46,35 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private const val CHAT_POLL_INTERVAL_MS = 3_000L
+private const val CHAT_PAGE_SIZE = 200
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(account: AccountSession?) {
+fun ChatScreen(
+    account: AccountSession?,
+    initialChat: UserChat? = null,
+    onInitialChatConsumed: () -> Unit = {}
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val chats = remember { mutableStateListOf<UserChat>() }
     val messages = remember { mutableStateListOf<StoredMessage>() }
     var selectedType by remember { mutableStateOf(ChatType.SOCIAL) }
     var selectedChat by remember { mutableStateOf<UserChat?>(null) }
-    var loading by remember { mutableStateOf(false) }
+    var loadingChats by remember { mutableStateOf(false) }
+    var refreshingChats by remember { mutableStateOf(false) }
+    var syncingMessages by remember { mutableStateOf(false) }
+    var messageSyncInFlight by remember { mutableStateOf(false) }
+    var sendingMessage by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(account?.userId) {
-        chats.clear()
-        messages.clear()
-        selectedChat = null
-        val session = account ?: return@LaunchedEffect
-        val local = LocalDataStore.loadChats(context, session.userId)
-        chats.addAll(local)
-        loading = true
+    suspend fun refreshChatList(session: AccountSession, initialLoad: Boolean) {
+        if (initialLoad) loadingChats = true else refreshingChats = true
         runCatching {
             withContext(Dispatchers.IO) {
                 RemoteConnections.loadUserChats(session.userId)
@@ -69,52 +83,160 @@ fun ChatScreen(account: AccountSession?) {
             chats.clear()
             chats.addAll(remote)
             LocalDataStore.saveChats(context, session.userId, remote)
+            selectedChat?.let { open ->
+                remote.firstOrNull { it.id == open.id }?.let { updated ->
+                    selectedChat = updated
+                    selectedType = updated.type
+                }
+            }
+            error = null
         }.onFailure {
-            if (local.isEmpty()) error = RemoteConnections.userFriendlyError(it)
+            if (chats.isEmpty()) error = RemoteConnections.userFriendlyError(it)
         }
-        loading = false
+        loadingChats = false
+        refreshingChats = false
+    }
+
+    suspend fun syncChatMessages(
+        session: AccountSession,
+        chat: UserChat,
+        forceFullHistory: Boolean,
+        showProgress: Boolean
+    ) {
+        if (messageSyncInFlight) return
+        messageSyncInFlight = true
+        if (showProgress) syncingMessages = true
+        val local = if (selectedChat?.id == chat.id) {
+            messages.toList()
+        } else {
+            LocalDataStore.loadMessages(context, session.userId, chat.id)
+        }
+        val firstCursor = if (forceFullHistory) "" else local.lastOrNull()?.id.orEmpty()
+        runCatching {
+            withContext(Dispatchers.IO) {
+                val downloaded = mutableListOf<StoredMessage>()
+                var cursor = firstCursor
+                var highestCount = 0
+                var highestVersion = 0L
+                var pageNumber = 0
+                do {
+                    val page = RemoteConnections.loadChatMessagePage(
+                        userId = session.userId,
+                        chatId = chat.id,
+                        afterMessageId = cursor
+                    )
+                    downloaded.addAll(page.messages)
+                    highestCount = maxOf(highestCount, page.messageCount)
+                    highestVersion = maxOf(highestVersion, page.version)
+                    val nextCursor = page.messages.lastOrNull()?.id.orEmpty()
+                    val canContinue = nextCursor.isNotBlank() && nextCursor != cursor &&
+                        (page.hasMore || page.messages.size >= CHAT_PAGE_SIZE)
+                    cursor = nextCursor
+                    pageNumber += 1
+                } while (canContinue && pageNumber < 20)
+                ChatMessagePage(
+                    messages = downloaded,
+                    messageCount = highestCount,
+                    version = highestVersion,
+                    hasMore = false
+                )
+            }
+        }.onSuccess { page ->
+            val normalized = page.messages.map { message ->
+                message.copy(chatId = message.chatId.ifBlank { chat.id })
+            }
+            val merged = mergeStoredMessages(local, normalized)
+            if (selectedChat?.id == chat.id) {
+                messages.clear()
+                messages.addAll(merged)
+            }
+            LocalDataStore.saveMessages(context, session.userId, chat.id, merged)
+            val resolvedCount = maxOf(chat.messageCount, page.messageCount, merged.size)
+            val resolvedVersion = maxOf(chat.version, page.version)
+            LocalDataStore.saveSync(
+                context,
+                session.userId,
+                ChatSyncMetadata(
+                    chatId = chat.id,
+                    lastMessageId = merged.lastOrNull()?.id.orEmpty(),
+                    messageCount = resolvedCount,
+                    version = resolvedVersion,
+                    lastSync = System.currentTimeMillis()
+                )
+            )
+            val chatIndex = chats.indexOfFirst { it.id == chat.id }
+            if (chatIndex >= 0) {
+                chats[chatIndex] = chats[chatIndex].copy(
+                    lastMessage = merged.lastOrNull()?.content.orEmpty(),
+                    lastMessageId = merged.lastOrNull()?.id.orEmpty(),
+                    lastMessageSenderId = merged.lastOrNull()?.senderId.orEmpty(),
+                    lastMessageSenderUsername = merged.lastOrNull()?.senderUsername,
+                    messageCount = resolvedCount,
+                    version = resolvedVersion,
+                    updatedAt = merged.lastOrNull()?.createdAt.orEmpty()
+                )
+                if (selectedChat?.id == chat.id) selectedChat = chats[chatIndex]
+                LocalDataStore.saveChats(context, session.userId, chats)
+            }
+            error = null
+        }.onFailure {
+            error = RemoteConnections.userFriendlyError(it)
+        }
+        syncingMessages = false
+        messageSyncInFlight = false
     }
 
     fun openChat(chat: UserChat) {
         val session = account ?: return
         selectedChat = chat
+        selectedType = chat.type
         messages.clear()
         val local = LocalDataStore.loadMessages(context, session.userId, chat.id)
         messages.addAll(local)
-        val metadata = LocalDataStore.loadSync(context, session.userId, chat.id)
-        val isOutdated = local.isEmpty() ||
-            local.size < chat.messageCount ||
-            (metadata?.version ?: 0) < chat.version
-        if (!isOutdated) return
-
         scope.launch {
-            loading = true
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    RemoteConnections.loadChatMessages(
-                        userId = session.userId,
-                        chatId = chat.id,
-                        afterMessageId = local.lastOrNull()?.id.orEmpty()
-                    )
-                }
-            }.onSuccess { downloaded ->
-                val merged = (local + downloaded).distinctBy { it.id }
-                messages.clear()
-                messages.addAll(merged)
-                LocalDataStore.saveMessages(context, session.userId, chat.id, merged)
-                LocalDataStore.saveSync(
-                    context,
-                    session.userId,
-                    ChatSyncMetadata(
-                        chatId = chat.id,
-                        lastMessageId = merged.lastOrNull()?.id.orEmpty(),
-                        messageCount = maxOf(chat.messageCount, merged.size),
-                        version = chat.version,
-                        lastSync = System.currentTimeMillis()
-                    )
-                )
-            }.onFailure { error = RemoteConnections.userFriendlyError(it) }
-            loading = false
+            // A full sync on open repairs gaps left by an older incremental cache.
+            syncChatMessages(
+                session = session,
+                chat = chat,
+                forceFullHistory = true,
+                showProgress = local.isEmpty()
+            )
+        }
+    }
+
+    LaunchedEffect(account?.userId) {
+        chats.clear()
+        messages.clear()
+        selectedChat = null
+        error = null
+        val session = account ?: return@LaunchedEffect
+        val local = LocalDataStore.loadChats(context, session.userId)
+        chats.addAll(local)
+        refreshChatList(session, initialLoad = true)
+    }
+
+    LaunchedEffect(account?.userId, initialChat?.id) {
+        val session = account ?: return@LaunchedEffect
+        val target = initialChat ?: return@LaunchedEffect
+        if (chats.none { it.id == target.id }) {
+            chats.add(0, target)
+            LocalDataStore.saveChats(context, session.userId, chats)
+        }
+        openChat(target)
+        onInitialChatConsumed()
+    }
+
+    LaunchedEffect(account?.userId, selectedChat?.id) {
+        val session = account ?: return@LaunchedEffect
+        val activeChat = selectedChat ?: return@LaunchedEffect
+        while (true) {
+            delay(CHAT_POLL_INTERVAL_MS)
+            syncChatMessages(
+                session = session,
+                chat = activeChat,
+                forceFullHistory = false,
+                showProgress = false
+            )
         }
     }
 
@@ -133,79 +255,128 @@ fun ChatScreen(account: AccountSession?) {
             selectedType = it
             selectedChat = null
             messages.clear()
+            error = null
         }
 
         if (selectedChat == null) {
             val visibleChats = chats.filter { it.type == selectedType }
-            when {
-                loading && chats.isEmpty() -> Box(
-                    Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) { CircularProgressIndicator() }
+            PullToRefreshBox(
+                isRefreshing = refreshingChats,
+                onRefresh = {
+                    scope.launch { refreshChatList(account, initialLoad = false) }
+                },
+                modifier = Modifier.fillMaxSize()
+            ) {
+                when {
+                    loadingChats && chats.isEmpty() -> Box(
+                        Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) { CircularProgressIndicator() }
 
-                visibleChats.isEmpty() -> Box(
-                    Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        error ?: "No tienes chats en esta categoría.",
-                        color = if (error == null) {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        } else {
-                            MaterialTheme.colorScheme.error
+                    visibleChats.isEmpty() -> Box(
+                        Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            error ?: "No tienes chats en esta categoría.",
+                            color = if (error == null) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            }
+                        )
+                    }
+
+                    else -> LazyColumn(
+                        modifier = Modifier.fillMaxSize().padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(visibleChats, key = UserChat::id) { chat ->
+                            ChatRow(chat, account.userId) { openChat(chat) }
                         }
-                    )
-                }
-
-                else -> LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(visibleChats, key = UserChat::id) { chat ->
-                        ChatRow(chat) { openChat(chat) }
                     }
                 }
             }
         } else {
+            val activeChat = selectedChat!!
             ConversationView(
                 account = account,
-                chat = selectedChat!!,
+                chat = activeChat,
                 messages = messages,
-                loading = loading,
+                loading = syncingMessages,
+                sending = sendingMessage,
+                error = error,
                 onBack = {
                     selectedChat = null
                     messages.clear()
+                    error = null
+                },
+                onRefresh = {
+                    scope.launch {
+                        syncChatMessages(
+                            session = account,
+                            chat = activeChat,
+                            forceFullHistory = true,
+                            showProgress = true
+                        )
+                    }
                 },
                 onSend = { content ->
                     scope.launch {
+                        sendingMessage = true
                         runCatching {
                             withContext(Dispatchers.IO) {
                                 RemoteConnections.sendChatMessage(
                                     account.userId,
-                                    selectedChat!!.id,
+                                    activeChat.id,
                                     content
                                 )
                             }
-                        }.onSuccess { sent ->
-                            messages.add(sent)
+                        }.onSuccess { response ->
+                            val sent = response.copy(
+                                chatId = response.chatId.ifBlank { activeChat.id },
+                                senderId = response.senderId.ifBlank { account.userId },
+                                senderUsername = response.senderUsername ?: account.username
+                            )
+                            val merged = mergeStoredMessages(messages.toList(), listOf(sent))
+                            messages.clear()
+                            messages.addAll(merged)
+                            val chatIndex = chats.indexOfFirst { it.id == activeChat.id }
+                            if (chatIndex >= 0) {
+                                chats[chatIndex] = chats[chatIndex].copy(
+                                    lastMessage = sent.content,
+                                    lastMessageId = sent.id,
+                                    lastMessageSenderId = sent.senderId,
+                                    lastMessageSenderUsername = sent.senderUsername,
+                                    messageCount = maxOf(
+                                        chats[chatIndex].messageCount + 1,
+                                        merged.size
+                                    ),
+                                    updatedAt = sent.createdAt
+                                )
+                                selectedChat = chats[chatIndex]
+                                LocalDataStore.saveChats(context, account.userId, chats)
+                            }
                             LocalDataStore.saveMessages(
                                 context,
                                 account.userId,
-                                selectedChat!!.id,
-                                messages
+                                activeChat.id,
+                                merged
                             )
                             LocalDataStore.saveSync(
                                 context,
                                 account.userId,
                                 ChatSyncMetadata(
-                                    chatId = selectedChat!!.id,
+                                    chatId = activeChat.id,
                                     lastMessageId = sent.id,
-                                    messageCount = messages.size,
-                                    version = selectedChat!!.version,
+                                    messageCount = maxOf(activeChat.messageCount + 1, merged.size),
+                                    version = activeChat.version,
                                     lastSync = System.currentTimeMillis()
                                 )
                             )
+                            error = null
                         }.onFailure { error = RemoteConnections.userFriendlyError(it) }
+                        sendingMessage = false
                     }
                 }
             )
@@ -242,7 +413,7 @@ private fun ChatTypeTabs(selected: ChatType, onSelect: (ChatType) -> Unit) {
 }
 
 @Composable
-private fun ChatRow(chat: UserChat, onClick: () -> Unit) {
+private fun ChatRow(chat: UserChat, currentUserId: String, onClick: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(18.dp),
@@ -250,7 +421,7 @@ private fun ChatRow(chat: UserChat, onClick: () -> Unit) {
     ) {
         Column(Modifier.padding(16.dp)) {
             Text(
-                chat.participants.joinToString().ifBlank { "Conversación" },
+                chatDisplayTitle(chat, currentUserId),
                 fontWeight = FontWeight.Bold
             )
             Text(
@@ -268,15 +439,40 @@ private fun ConversationView(
     chat: UserChat,
     messages: List<StoredMessage>,
     loading: Boolean,
+    sending: Boolean,
+    error: String?,
     onBack: () -> Unit,
+    onRefresh: () -> Unit,
     onSend: (String) -> Unit
 ) {
     var draft by remember(chat.id) { mutableStateOf("") }
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+    }
+
     Column(Modifier.fillMaxSize()) {
-        Button(onClick = onBack, modifier = Modifier.padding(10.dp)) {
-            Text("Volver a chats")
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Volver")
+            }
+            Text(
+                chatDisplayTitle(chat, account.userId),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            IconButton(onClick = onRefresh, enabled = !loading) {
+                Icon(Icons.Outlined.Refresh, contentDescription = "Actualizar conversación")
+            }
         }
         LazyColumn(
+            state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -297,11 +493,39 @@ private fun ConversationView(
                             MaterialTheme.colorScheme.surfaceContainer
                         }
                     ) {
-                        Text(message.content, modifier = Modifier.padding(12.dp))
+                        Column(Modifier.padding(12.dp)) {
+                            if (message.senderId != account.userId) {
+                                Text(
+                                    message.senderUsername
+                                        ?: chat.participantUsernames[message.senderId]
+                                        ?: "Usuario de APPBIKE",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Text(message.content)
+                        }
                     }
                 }
             }
-            if (loading) item { CircularProgressIndicator() }
+            if (loading) {
+                item {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(8.dp),
+                        contentAlignment = Alignment.Center
+                    ) { CircularProgressIndicator() }
+                }
+            }
+            error?.let { message ->
+                item {
+                    Text(
+                        message,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(8.dp)
+                    )
+                }
+            }
         }
         Row(
             modifier = Modifier.fillMaxWidth().padding(10.dp),
@@ -316,14 +540,31 @@ private fun ConversationView(
                 shape = RoundedCornerShape(18.dp)
             )
             Button(
-                enabled = draft.isNotBlank(),
+                enabled = draft.isNotBlank() && !sending,
                 onClick = {
                     onSend(draft)
                     draft = ""
                 }
             ) {
-                Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "Enviar")
+                if (sending) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "Enviar")
+                }
             }
         }
     }
 }
+
+private fun chatDisplayTitle(chat: UserChat, currentUserId: String): String =
+    chat.title.takeIf(String::isNotBlank)
+        ?: chat.participants
+            .asSequence()
+            .filter { it != currentUserId }
+            .mapNotNull(chat.participantUsernames::get)
+            .firstOrNull()
+        ?: chat.participantUsernames.values.firstOrNull()
+        ?: "Conversación"
