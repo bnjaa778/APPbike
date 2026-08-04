@@ -200,10 +200,14 @@ object ChatNotificationCenter {
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .build()
-        NotificationManagerCompat.from(context).notify(
-            event.messageId.ifBlank { "${event.chatId}:${event.message}" }.hashCode(),
-            notification
-        )
+        try {
+            NotificationManagerCompat.from(context).notify(
+                event.messageId.ifBlank { "${event.chatId}:${event.message}" }.hashCode(),
+                notification
+            )
+        } catch (_: SecurityException) {
+            // Android 13+ can revoke POST_NOTIFICATIONS after the pre-check.
+        }
     }
 }
 

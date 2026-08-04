@@ -45,6 +45,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.appbike.ui.theme.AppBorderSubtle
+import com.example.appbike.ui.theme.AppPrimaryBright
+import com.example.appbike.ui.theme.AppPrimarySoft
+import com.example.appbike.ui.theme.AppSurface
+import com.example.appbike.ui.theme.AppSurfaceElevated
+import com.example.appbike.ui.theme.AppTextPrimary
+import com.example.appbike.ui.theme.AppTextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -241,16 +248,20 @@ fun ChatScreen(
     }
 
     if (account == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(
-                "Inicia sesión para ver tus conversaciones.",
-                style = MaterialTheme.typography.titleLarge
-            )
+        PremiumScreenBackground(PremiumGlowStyle.Chat) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                EmptyState(
+                    title = "Inicia sesión para ver tus conversaciones",
+                    description = "Tus mensajes de juntas y Marketplace se sincronizan al entrar con tu cuenta.",
+                    modifier = Modifier.padding(AppDimens.Space4)
+                )
+            }
         }
         return
     }
 
-    Column(Modifier.fillMaxSize()) {
+    PremiumScreenBackground(PremiumGlowStyle.Chat) {
+        Column(Modifier.fillMaxSize()) {
         ChatTypeTabs(selectedType) {
             selectedType = it
             selectedChat = null
@@ -269,27 +280,28 @@ fun ChatScreen(
             ) {
                 when {
                     loadingChats && chats.isEmpty() -> Box(
-                        Modifier.fillMaxSize(),
+                        Modifier.fillMaxSize().padding(AppDimens.Space4),
                         contentAlignment = Alignment.Center
-                    ) { CircularProgressIndicator() }
+                    ) { LoadingState("Cargando conversaciones...") }
 
                     visibleChats.isEmpty() -> Box(
                         Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            error ?: "No tienes chats en esta categoría.",
-                            color = if (error == null) {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            } else {
-                                MaterialTheme.colorScheme.error
-                            }
-                        )
+                        if (error == null) {
+                            EmptyState(
+                                title = "No tienes chats en esta categoría",
+                                description = "Cuando contactes publicaciones o juntas, aparecerán aquí.",
+                                modifier = Modifier.padding(AppDimens.Space4)
+                            )
+                        } else {
+                            ErrorBanner(error ?: "")
+                        }
                     }
 
                     else -> LazyColumn(
-                        modifier = Modifier.fillMaxSize().padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        modifier = Modifier.fillMaxSize().padding(AppDimens.Space4),
+                        verticalArrangement = Arrangement.spacedBy(AppDimens.Space3)
                     ) {
                         items(visibleChats, key = UserChat::id) { chat ->
                             ChatRow(chat, account.userId) { openChat(chat) }
@@ -381,12 +393,17 @@ fun ChatScreen(
                 }
             )
         }
+        }
     }
 }
 
 @Composable
 private fun ChatTypeTabs(selected: ChatType, onSelect: (ChatType) -> Unit) {
-    TabRow(selectedTabIndex = if (selected == ChatType.SOCIAL) 0 else 1) {
+    TabRow(
+        selectedTabIndex = if (selected == ChatType.SOCIAL) 0 else 1,
+        containerColor = AppSurface,
+        contentColor = AppTextPrimary
+    ) {
         Tab(
             selected = selected == ChatType.SOCIAL,
             onClick = { onSelect(ChatType.SOCIAL) },
@@ -416,18 +433,25 @@ private fun ChatTypeTabs(selected: ChatType, onSelect: (ChatType) -> Unit) {
 private fun ChatRow(chat: UserChat, currentUserId: String, onClick: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
-        tonalElevation = 2.dp
+        shape = RoundedCornerShape(AppDimens.RadiusLarge),
+        color = AppSurfaceElevated,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            AppBorderSubtle
+        ),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(AppDimens.Space4)) {
             Text(
                 chatDisplayTitle(chat, currentUserId),
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                color = AppTextPrimary
             )
             Text(
                 chat.lastMessage.ifBlank { "Sin mensajes" },
                 maxLines = 1,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = AppTextSecondary
             )
         }
     }
@@ -454,8 +478,8 @@ private fun ConversationView(
 
     Column(Modifier.fillMaxSize()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = AppDimens.Space3, vertical = AppDimens.Space2),
+            horizontalArrangement = Arrangement.spacedBy(AppDimens.Space2),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {
@@ -465,7 +489,8 @@ private fun ConversationView(
                 chatDisplayTitle(chat, account.userId),
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                color = AppTextPrimary
             )
             IconButton(onClick = onRefresh, enabled = !loading) {
                 Icon(Icons.Outlined.Refresh, contentDescription = "Actualizar conversación")
@@ -473,8 +498,8 @@ private fun ConversationView(
         }
         LazyColumn(
             state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = AppDimens.Space3),
+            verticalArrangement = Arrangement.spacedBy(AppDimens.Space2)
         ) {
             items(messages, key = StoredMessage::id) { message ->
                 Row(
@@ -488,23 +513,31 @@ private fun ConversationView(
                     Surface(
                         shape = RoundedCornerShape(16.dp),
                         color = if (message.senderId == account.userId) {
-                            MaterialTheme.colorScheme.primaryContainer
+                            AppPrimarySoft
                         } else {
-                            MaterialTheme.colorScheme.surfaceContainer
-                        }
+                            AppSurfaceElevated
+                        },
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (message.senderId == account.userId) {
+                                AppPrimaryBright.copy(alpha = 0.24f)
+                            } else {
+                                AppBorderSubtle
+                            }
+                        )
                     ) {
-                        Column(Modifier.padding(12.dp)) {
+                        Column(Modifier.padding(AppDimens.Space3)) {
                             if (message.senderId != account.userId) {
                                 Text(
                                     message.senderUsername
                                         ?: chat.participantUsernames[message.senderId]
                                         ?: "Usuario de APPBIKE",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary,
+                                    color = AppPrimaryBright,
                                     fontWeight = FontWeight.Bold
                                 )
                             }
-                            Text(message.content)
+                            Text(message.content, color = AppTextPrimary)
                         }
                     }
                 }
@@ -514,30 +547,33 @@ private fun ConversationView(
                     Box(
                         modifier = Modifier.fillMaxWidth().padding(8.dp),
                         contentAlignment = Alignment.Center
-                    ) { CircularProgressIndicator() }
+                    ) {
+                        CircularProgressIndicator(
+                            color = AppPrimaryBright,
+                            strokeWidth = 2.dp
+                        )
+                    }
                 }
             }
             error?.let { message ->
                 item {
-                    Text(
-                        message,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(8.dp)
-                    )
+                    ErrorBanner(message, modifier = Modifier.padding(AppDimens.Space2))
                 }
             }
         }
         Row(
-            modifier = Modifier.fillMaxWidth().padding(10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth().padding(AppDimens.Space3),
+            horizontalArrangement = Arrangement.spacedBy(AppDimens.Space2),
             verticalAlignment = Alignment.CenterVertically
         ) {
             OutlinedTextField(
                 value = draft,
                 onValueChange = { draft = it },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f),
                 placeholder = { Text("Mensaje") },
-                shape = RoundedCornerShape(18.dp)
+                shape = RoundedCornerShape(AppDimens.RadiusMedium),
+                colors = appBikeTextFieldColors()
             )
             Button(
                 enabled = draft.isNotBlank() && !sending,

@@ -280,19 +280,38 @@ private fun OwnPublicationDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (editing) {
-                    OutlinedTextField(title, { title = it }, label = { Text("Título") })
+                    OutlinedTextField(
+                        title,
+                        { title = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .appBikeTextFieldGlow(),
+                        label = { Text("Título") },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = appBikeTextFieldColors()
+                    )
                     OutlinedTextField(
                         description,
                         { description = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .appBikeTextFieldGlow(),
                         label = { Text("Descripción") },
-                        minLines = 3
+                        minLines = 3,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = appBikeTextFieldColors()
                     )
                     OutlinedTextField(
                         price,
                         { price = normalizeWholeUnitInput(it) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .appBikeTextFieldGlow(),
                         label = { Text("Precio (${publication.currencyCode})") },
                         prefix = { Text("$") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = appBikeTextFieldColors()
                     )
                     ProductStatusSelector(
                         selectedStatus = productStatus,
@@ -438,12 +457,26 @@ private fun OwnMeetupDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (editing) {
-                    OutlinedTextField(title, { title = it }, label = { Text("Título") })
+                    OutlinedTextField(
+                        title,
+                        { title = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .appBikeTextFieldGlow(),
+                        label = { Text("Título") },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = appBikeTextFieldColors()
+                    )
                     OutlinedTextField(
                         description,
                         { description = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .appBikeTextFieldGlow(),
                         label = { Text("Descripción") },
-                        minLines = 3
+                        minLines = 3,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = appBikeTextFieldColors()
                     )
                 } else {
                     Text(if (meetup.status == "pasada") "Junta anterior" else "Junta actual")

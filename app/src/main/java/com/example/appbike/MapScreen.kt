@@ -79,6 +79,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import com.example.appbike.ui.theme.AppBackgroundElevated
+import com.example.appbike.ui.theme.AppBorderSubtle
+import com.example.appbike.ui.theme.AppPrimary
+import com.example.appbike.ui.theme.AppPrimaryBright
+import com.example.appbike.ui.theme.AppSurfaceElevated
+import com.example.appbike.ui.theme.AppTextPrimary
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.graphics.drawable.DrawableCompat
 import androidx.lifecycle.Lifecycle
@@ -346,38 +352,26 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                shadowElevation = 8.dp
-            ) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = {
-                        Text(
-                            if (creationStep == MeetupCreationStep.SELECT_LOCATION) {
-                                "Toca el mapa para marcar el punto"
-                            } else {
-                                "Buscar junta"
-                            }
-                        )
-                    },
-                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                    trailingIcon = {
-                        IconButton(onClick = { userLocation?.let(::refresh) }) {
-                            Icon(Icons.Outlined.Search, contentDescription = "Buscar")
-                        }
-                    },
-                    enabled = creationStep == MeetupCreationStep.CLOSED && userLocation != null,
-                    singleLine = true,
-                    shape = RoundedCornerShape(20.dp),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(
-                        onSearch = { userLocation?.let(::refresh) }
-                    )
+            SearchField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = if (creationStep == MeetupCreationStep.SELECT_LOCATION) {
+                    "Toca el mapa para marcar el punto"
+                } else {
+                    "Buscar junta"
+                },
+                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                trailingIcon = {
+                    IconButton(onClick = { userLocation?.let(::refresh) }) {
+                        Icon(Icons.Outlined.Search, contentDescription = "Buscar")
+                    }
+                },
+                enabled = creationStep == MeetupCreationStep.CLOSED && userLocation != null,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(
+                    onSearch = { userLocation?.let(::refresh) }
                 )
-            }
+            )
 
             CurrentLocationRow(
                 location = displayedLocation,
@@ -397,37 +391,37 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
             Surface(
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = 132.dp),
                 shape = CircleShape,
+                color = AppBackgroundElevated,
+                border = androidx.compose.foundation.BorderStroke(1.dp, AppBorderSubtle),
                 shadowElevation = 4.dp
             ) {
                 CircularProgressIndicator(
                     modifier = Modifier.padding(10.dp).size(24.dp),
-                    strokeWidth = 2.dp
+                    strokeWidth = 2.dp,
+                    color = AppPrimaryBright
                 )
             }
         }
 
         error?.let {
-            Surface(
+            ErrorBanner(
+                message = it,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 136.dp, start = 24.dp, end = 24.dp),
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.errorContainer,
-                shadowElevation = 4.dp
-            ) {
-                Text(
-                    it,
-                    modifier = Modifier.padding(12.dp),
-                    color = MaterialTheme.colorScheme.onErrorContainer
-                )
-            }
+                    .padding(top = 136.dp, start = 24.dp, end = 24.dp)
+            )
         }
 
         if (creationStep == MeetupCreationStep.SELECT_LOCATION) {
             Surface(
                 modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
                 shape = RoundedCornerShape(22.dp),
-                shadowElevation = 10.dp
+                color = AppSurfaceElevated,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    AppBorderSubtle
+                ),
+                shadowElevation = 4.dp
             ) {
                 Row(
                     modifier = Modifier.padding(12.dp),
@@ -444,7 +438,7 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
                         modifier = Modifier.weight(1f),
                         enabled = selectedPoint != null,
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF246BCE)
+                            containerColor = MaterialTheme.colorScheme.secondary
                         ),
                         onClick = { creationStep = MeetupCreationStep.FORM }
                     ) { Text("Confirmar") }
@@ -454,6 +448,8 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
             FloatingActionButton(
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp),
                 shape = CircleShape,
+                containerColor = AppPrimary,
+                contentColor = AppTextPrimary,
                 onClick = {
                     if (account == null) showLoginRequired = true
                     else creationStep = MeetupCreationStep.SELECT_LOCATION
@@ -1059,7 +1055,10 @@ internal fun LocationSearchDialog(
                         error = null
                         results = emptyList()
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .appBikeTextFieldGlow(),
+                    colors = appBikeTextFieldColors(),
                     label = { Text("Lugar o dirección") },
                     leadingIcon = { Icon(Icons.Outlined.LocationOn, contentDescription = null) },
                     trailingIcon = {
@@ -1358,8 +1357,12 @@ private fun MeetupFormDialog(
                     value = description,
                     onValueChange = { description = it },
                     label = { Text("Información de la junta") },
-                    modifier = Modifier.fillMaxWidth().height(140.dp),
-                    shape = RoundedCornerShape(16.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(140.dp)
+                        .appBikeTextFieldGlow(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = appBikeTextFieldColors()
                 )
                 Button(
                     modifier = Modifier.fillMaxWidth(),

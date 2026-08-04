@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,9 +21,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Link
-import androidx.compose.material.icons.outlined.Logout
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.Button
@@ -47,9 +50,19 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import com.example.appbike.ui.theme.AppBorderSubtle
+import com.example.appbike.ui.theme.AppErrorSoft
+import com.example.appbike.ui.theme.AppPrimary
+import com.example.appbike.ui.theme.AppPrimaryBright
+import com.example.appbike.ui.theme.AppPrimarySoft
+import com.example.appbike.ui.theme.AppSurface
+import com.example.appbike.ui.theme.AppSurfaceElevated
+import com.example.appbike.ui.theme.AppTextPrimary
+import com.example.appbike.ui.theme.AppTextSecondary
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -190,23 +203,18 @@ fun AccountScreen(
         sportsLoading = false
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                text = "Cuenta y deporte",
-                style = MaterialTheme.typography.headlineLarge
-            )
-            Text(
-                text = "Tu perfil y conexiones deportivas en un solo lugar.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+    PremiumScreenBackground(PremiumGlowStyle.Account) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(top = 18.dp, bottom = 40.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            AccountReferenceHeader(session)
+            AccountReferenceTabs()
+            AccountHeroPanel()
 
         if (session == null) {
             LoginCard(
@@ -247,7 +255,7 @@ fun AccountScreen(
             ProfileContentSection(session)
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.10f))
 
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(
@@ -266,7 +274,7 @@ fun AccountScreen(
             }
             Text(
                 text = "Conecta tus plataformas para reunir rutas y entrenamientos.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = AppTextSecondary
             )
         }
 
@@ -313,7 +321,8 @@ fun AccountScreen(
         if (sportsLoading) CircularProgressIndicator()
         sportsError?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 
-        Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(12.dp))
+        }
     }
 
     if (
@@ -336,13 +345,17 @@ fun AccountScreen(
                             usernameCandidate = it.take(30)
                             usernameError = null
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .appBikeTextFieldGlow(),
                         singleLine = true,
                         label = { Text("Nombre de usuario") },
                         supportingText = {
                             Text("3 a 30 caracteres: letras, números, punto, _ o -")
                         },
-                        isError = usernameError != null
+                        isError = usernameError != null,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = appBikeTextFieldColors()
                     )
                     usernameError?.let {
                         Text(it, color = MaterialTheme.colorScheme.error)
@@ -392,6 +405,137 @@ private fun isValidUsername(value: String): Boolean =
     Regex("^[A-Za-z0-9][A-Za-z0-9._-]{2,29}$").matches(value.trim())
 
 @Composable
+private fun AccountReferenceHeader(session: AccountSession?) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                "Tu",
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.Black
+            )
+            Text(
+                session?.username ?: session?.email ?: "Perfil APPBIKE",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AppTextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Surface(
+            shape = CircleShape,
+            color = AppSurfaceElevated,
+            border = BorderStroke(1.dp, AppBorderSubtle)
+        ) {
+            Box(
+                modifier = Modifier.size(52.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.PersonOutline,
+                    contentDescription = null,
+                    tint = AppPrimaryBright
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AccountReferenceTabs() {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Bottom
+    ) {
+        AccountReferenceTab("Progreso", selected = true, modifier = Modifier.weight(1f))
+        AccountReferenceTab("Entrenamientos", selected = false, modifier = Modifier.weight(1f))
+        AccountReferenceTab("Actividades", selected = false, modifier = Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun AccountReferenceTab(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = if (selected) FontWeight.Black else FontWeight.Bold,
+            color = if (selected) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                AppTextSecondary
+            },
+            maxLines = 1
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.58f)
+                .height(4.dp)
+                .background(
+                    if (selected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        androidx.compose.ui.graphics.Color.Transparent
+                    },
+                    RoundedCornerShape(100.dp)
+                )
+        )
+    }
+}
+
+@Composable
+private fun AccountHeroPanel() {
+    AppCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = AppDimens.Space2),
+        highlighted = true
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(AppDimens.Space4)) {
+        Surface(
+            shape = CircleShape,
+                color = AppSurfaceElevated,
+                border = BorderStroke(1.dp, AppBorderSubtle)
+        ) {
+            Box(
+                modifier = Modifier.size(48.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                        imageVector = Icons.Outlined.Lock,
+                    contentDescription = null,
+                        tint = AppTextPrimary
+                )
+            }
+        }
+            Text(
+                text = "Descubre lo lejos que puedes llegar",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Black,
+                color = AppTextPrimary
+            )
+            Text(
+                text = "Controla tu progreso, tus rutas y tus conexiones deportivas desde APPBIKE.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = AppTextSecondary
+            )
+        }
+    }
+}
+
+@Composable
 private fun LoginCard(
     email: String,
     password: String,
@@ -403,18 +547,19 @@ private fun LoginCard(
 ) {
     Card(
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
+            containerColor = AppSurfaceElevated
         ),
-        shape = RoundedCornerShape(24.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        shape = RoundedCornerShape(AppDimens.RadiusXLarge),
+        border = BorderStroke(1.dp, AppBorderSubtle),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(
-            modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            modifier = Modifier.padding(AppDimens.Space5),
+            verticalArrangement = Arrangement.spacedBy(AppDimens.Space4)
         ) {
             Surface(
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.primaryContainer
+                color = AppPrimarySoft
             ) {
                 Box(
                     modifier = Modifier.size(52.dp),
@@ -423,11 +568,15 @@ private fun LoginCard(
                     Icon(
                         imageVector = Icons.Outlined.PersonOutline,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                        tint = AppPrimaryBright
                     )
                 }
             }
-            Text("Bienvenido", style = MaterialTheme.typography.headlineMedium)
+            Text(
+                "Bienvenido",
+                style = MaterialTheme.typography.headlineMedium,
+                color = AppTextPrimary
+            )
             Text(
                 "Inicia sesión para cargar tus bicicletas y mantenciones personales.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -440,9 +589,7 @@ private fun LoginCard(
                 onChange = onPasswordChange
             )
 
-            errorMessage?.let {
-                Text(it, color = MaterialTheme.colorScheme.error)
-            }
+            errorMessage?.let { ErrorBanner(it) }
 
             Button(
                 modifier = Modifier
@@ -474,13 +621,15 @@ private fun ProfileCard(
 ) {
     Card(
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer
+            containerColor = AppSurfaceElevated
         ),
-        shape = RoundedCornerShape(24.dp)
+        shape = RoundedCornerShape(AppDimens.RadiusXLarge),
+        border = BorderStroke(1.dp, AppBorderSubtle),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(
-            modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            modifier = Modifier.padding(AppDimens.Space5),
+            verticalArrangement = Arrangement.spacedBy(AppDimens.Space4)
         ) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -488,7 +637,7 @@ private fun ProfileCard(
             ) {
                 Surface(
                     shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primary
+                    color = AppPrimary
                 ) {
                     Box(
                         modifier = Modifier.size(54.dp),
@@ -497,7 +646,7 @@ private fun ProfileCard(
                         Icon(
                             imageVector = Icons.Outlined.PersonOutline,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimary
+                            tint = AppTextPrimary
                         )
                     }
                 }
@@ -505,11 +654,12 @@ private fun ProfileCard(
                     Text(
                         "Sesión activa",
                         style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary
+                        color = AppPrimaryBright
                     )
                     Text(
                         session.username ?: session.email,
                         style = MaterialTheme.typography.titleLarge,
+                        color = AppTextPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -517,7 +667,7 @@ private fun ProfileCard(
                         Text(
                             session.email,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            color = AppTextSecondary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -526,17 +676,17 @@ private fun ProfileCard(
                 Icon(
                     imageVector = Icons.Outlined.CheckCircle,
                     contentDescription = "Cuenta conectada",
-                    tint = MaterialTheme.colorScheme.primary
+                    tint = AppPrimaryBright
                 )
             }
             Text(
                 "Tus bicicletas y mantenciones se cargan de forma privada desde esta cuenta.",
-                color = MaterialTheme.colorScheme.onPrimaryContainer
+                color = AppTextSecondary
             )
             if (!notificationsEnabled) {
                 Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.errorContainer
+                    shape = RoundedCornerShape(AppDimens.RadiusMedium),
+                    color = AppErrorSoft
                 ) {
                     Column(
                         modifier = Modifier.padding(12.dp),
@@ -545,12 +695,12 @@ private fun ProfileCard(
                         Text(
                             "Notificaciones desactivadas",
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onErrorContainer
+                            color = MaterialTheme.colorScheme.error
                         )
                         Text(
                             "Actívalas para recibir mensajes cuando APPBIKE esté en segundo plano.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer
+                            color = MaterialTheme.colorScheme.error
                         )
                         TextButton(onClick = onOpenNotificationSettings) {
                             Text("Abrir ajustes")
@@ -562,7 +712,7 @@ private fun ProfileCard(
                 modifier = Modifier.fillMaxWidth(),
                 onClick = onLogout
             ) {
-                Icon(Icons.Outlined.Logout, contentDescription = null)
+                Icon(Icons.AutoMirrored.Outlined.Logout, contentDescription = null)
                 Spacer(Modifier.size(8.dp))
                 Text("Cerrar sesión")
             }
@@ -578,10 +728,11 @@ private fun SportsPlatformCard(
 ) {
     Card(
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
+            containerColor = AppSurfaceElevated
         ),
-        shape = RoundedCornerShape(20.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        shape = RoundedCornerShape(AppDimens.RadiusLarge),
+        border = BorderStroke(1.dp, AppBorderSubtle),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier
@@ -593,9 +744,9 @@ private fun SportsPlatformCard(
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = if (platform.connected) {
-                    MaterialTheme.colorScheme.primaryContainer
+                    AppPrimarySoft
                 } else {
-                    MaterialTheme.colorScheme.surfaceContainer
+                    AppSurface
                 }
             ) {
                 Box(
@@ -609,7 +760,7 @@ private fun SportsPlatformCard(
                             Icons.Outlined.Link
                         },
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
+                        tint = AppPrimaryBright
                     )
                 }
             }
@@ -618,19 +769,19 @@ private fun SportsPlatformCard(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                Text(platform.name, fontWeight = FontWeight.Bold)
+                Text(platform.name, fontWeight = FontWeight.Bold, color = AppTextPrimary)
                 Text(
                     platform.description,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = AppTextSecondary
                 )
                 Text(
                     if (platform.connected) "Conectado" else "Sin conectar",
                     style = MaterialTheme.typography.labelMedium,
                     color = if (platform.connected) {
-                        MaterialTheme.colorScheme.primary
+                        AppPrimaryBright
                     } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
+                        AppTextSecondary
                     }
                 )
             }

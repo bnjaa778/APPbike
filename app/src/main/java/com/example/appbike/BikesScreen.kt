@@ -34,6 +34,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.appbike.ui.theme.AppBorderSubtle
+import com.example.appbike.ui.theme.AppPrimary
+import com.example.appbike.ui.theme.AppPrimaryBright
+import com.example.appbike.ui.theme.AppSurfaceElevated
+import com.example.appbike.ui.theme.AppTextPrimary
+import com.example.appbike.ui.theme.AppTextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
@@ -82,16 +88,17 @@ fun BikesScreen(
         isLoadingBikes = false
     }
 
-    Scaffold { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 18.dp)
-                .verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(18.dp)
-        ) {
+    PremiumScreenBackground(PremiumGlowStyle.Bikes) {
+        Scaffold(containerColor = Color.Transparent) { innerPadding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(horizontal = AppDimens.Space4)
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(AppDimens.Space4)
+            ) {
             if (onBack != null) Row(modifier = Modifier.fillMaxWidth()) {
                 TextButton(onClick = onBack) {
                     Text("← Volver")
@@ -102,23 +109,28 @@ fun BikesScreen(
                 text = "Mis bicicletas",
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.Black,
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Center,
+                color = AppTextPrimary
             )
 
+            connectionWarning?.let { ErrorBanner(it) }
+
             if (account == null) {
-                Text(
-                    "Inicia sesión para ver tus bicicletas guardadas",
-                    textAlign = TextAlign.Center
+                EmptyState(
+                    title = "Inicia sesión para ver tus bicicletas guardadas",
+                    description = "Accede a tu cuenta para cargar tus bicicletas, fotos y mantenciones.",
+                    actionLabel = "Iniciar sesión",
+                    onAction = onOpenAccount
                 )
-                Button(onClick = onOpenAccount) {
-                    Text("Iniciar sesión")
-                }
             } else if (isLoadingBikes && bikes.isEmpty()) {
-                CircularProgressIndicator()
-                Text("Cargando bicicletas...")
+                LoadingState("Cargando bicicletas...")
             } else if (bikes.isEmpty()) {
-                Spacer(modifier = Modifier.height(72.dp))
-                AddBikeButton { showForm = true }
+                EmptyState(
+                    title = "Aún no tienes bicicletas",
+                    description = "Agrega tu primera bicicleta para guardar fotos, mantenciones y servicios.",
+                    actionLabel = "Agregar bicicleta",
+                    onAction = { showForm = true }
+                )
             } else {
                 bikes.forEach { bike ->
                     BikeSummaryCard(bike) {
@@ -158,7 +170,8 @@ fun BikesScreen(
                 AddBikeButton { showForm = true }
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
+                Spacer(modifier = Modifier.height(32.dp))
+            }
         }
     }
 
@@ -231,28 +244,6 @@ fun BikesScreen(
         }
     }
 
-    connectionWarning?.let { message ->
-        AlertDialog(
-            onDismissRequest = {
-                connectionWarning = null
-            },
-            title = {
-                Text("No se pudo sincronizar")
-            },
-            text = {
-                Text(message)
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        connectionWarning = null
-                    }
-                ) {
-                    Text("Entendido")
-                }
-            }
-        )
-    }
 }
 
 @Composable
@@ -263,24 +254,26 @@ private fun AddBikeButton(onClick: () -> Unit) {
     ) {
         Surface(
             modifier = Modifier
-                .size(82.dp)
-                .clickable(onClick = onClick)
-                .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape),
+                .size(64.dp)
+                .clickable(onClick = onClick),
             shape = CircleShape,
-            color = Color.Transparent
+            color = AppPrimary,
+            shadowElevation = 4.dp
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Text(
                     "+",
-                    fontSize = 48.sp,
-                    fontWeight = FontWeight.Light
+                    fontSize = 36.sp,
+                    fontWeight = FontWeight.Light,
+                    color = AppTextPrimary
                 )
             }
         }
 
         Text(
             "Agregar bicicleta",
-            fontWeight = FontWeight.SemiBold
+            fontWeight = FontWeight.SemiBold,
+            color = AppTextSecondary
         )
     }
 }
@@ -294,13 +287,20 @@ private fun BikeSummaryCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(28.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 5.dp)
+        shape = RoundedCornerShape(AppDimens.RadiusXLarge),
+        colors = CardDefaults.cardColors(
+            containerColor = AppSurfaceElevated
+        ),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            AppBorderSubtle
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(
-            modifier = Modifier.padding(18.dp),
+            modifier = Modifier.padding(AppDimens.Space5),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(AppDimens.Space3)
         ) {
             Text(
                 bike.name,

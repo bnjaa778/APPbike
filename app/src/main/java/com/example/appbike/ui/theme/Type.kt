@@ -13,7 +13,7 @@ val Typography = Typography(
         fontWeight = FontWeight.ExtraBold,
         fontSize = 44.sp,
         lineHeight = 48.sp,
-        letterSpacing = (-1).sp
+        letterSpacing = 0.sp
     ),
     headlineLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,

@@ -1,7 +1,6 @@
 package com.example.appbike.ui.theme
 
 import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -16,41 +15,61 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 private val DarkColorScheme = darkColorScheme(
-    primary = BikeMint,
-    onPrimary = BikeGreenDark,
-    primaryContainer = BikeGreen,
-    onPrimaryContainer = Color.White,
-    secondary = Color(0xFFAFCDBE),
-    background = BikeDarkSurface,
-    surface = BikeDarkSurface,
-    surfaceVariant = BikeDarkContainer,
-    onBackground = Color(0xFFF0F5F1),
-    onSurface = Color(0xFFF0F5F1)
+    primary = AppPrimary,
+    onPrimary = AppTextPrimary,
+    primaryContainer = AppPrimarySoft,
+    onPrimaryContainer = AppPrimaryBright,
+    secondary = AppPrimaryBright,
+    onSecondary = AppBackground,
+    secondaryContainer = AppPrimarySoft,
+    onSecondaryContainer = AppTextPrimary,
+    tertiary = AppSuccess,
+    onTertiary = AppBackground,
+    tertiaryContainer = Color(0x1A55D98B),
+    onTertiaryContainer = AppSuccess,
+    background = AppBackground,
+    onBackground = AppTextPrimary,
+    surface = AppSurface,
+    onSurface = AppTextPrimary,
+    surfaceVariant = AppSurfaceElevated,
+    onSurfaceVariant = AppTextSecondary,
+    surfaceContainer = AppBackgroundElevated,
+    surfaceContainerHigh = AppSurfaceElevated,
+    surfaceContainerHighest = AppSurfacePressed,
+    outline = AppBorderSubtle,
+    outlineVariant = AppBorderSubtle,
+    error = AppError,
+    onError = AppBackground,
+    errorContainer = AppErrorSoft,
+    onErrorContainer = AppError
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = BikeGreen,
+    primary = BikePurple,
     onPrimary = Color.White,
-    primaryContainer = BikeMint,
-    onPrimaryContainer = BikeGreenDark,
-    secondary = BikeSlate,
+    primaryContainer = Color(0xFFE7DFFF),
+    onPrimaryContainer = BikePurpleDeep,
+    secondary = BikePurple,
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFDCE9E1),
+    secondaryContainer = Color(0xFFD8ECFF),
     onSecondaryContainer = BikeInk,
-    tertiary = Color(0xFF9A5B25),
-    background = BikeSand,
-    surface = BikeSurface,
-    surfaceVariant = Color(0xFFE8ECE8),
-    surfaceContainer = Color(0xFFF0F1EC),
-    surfaceContainerHigh = Color(0xFFE8EAE4),
+    tertiary = Color(0xFF0EA5E9),
+    background = Color(0xFFF4F6FF),
+    surface = BikeLightSurface,
+    surfaceVariant = Color(0xFFE3E8F7),
+    surfaceContainer = Color(0xFFEEF2FF),
+    surfaceContainerHigh = Color(0xFFE3E9FA),
+    surfaceContainerHighest = Color(0xFFD9E2F5),
     onBackground = BikeInk,
     onSurface = BikeInk,
-    outline = Color(0xFF7A8982)
+    onSurfaceVariant = Color(0xFF4B5568),
+    outline = Color(0xFF6B748A),
+    outlineVariant = Color(0xFFC7D0E6)
 )
 
 @Composable
 fun APPbikeTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = true,
     // Dynamic color is available on Android 12+
     dynamicColor: Boolean = true,
     content: @Composable () -> Unit

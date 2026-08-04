@@ -3,12 +3,14 @@ package com.example.appbike
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.Image
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -23,16 +25,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.DirectionsBike
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.PersonOutline
-import androidx.compose.material.icons.outlined.Storefront
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
@@ -53,12 +53,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.appbike.ui.theme.APPbikeTheme
+import com.example.appbike.ui.theme.AppBackgroundElevated
+import com.example.appbike.ui.theme.AppPrimaryBright
+import com.example.appbike.ui.theme.AppPrimarySoft
+import com.example.appbike.ui.theme.AppSurfaceElevated
+import com.example.appbike.ui.theme.AppTextPrimary
+import com.example.appbike.ui.theme.AppTextSecondary
 import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
@@ -162,7 +169,7 @@ data class NotificationChatTarget(
 private data class MainDestination(
     val label: String,
     val screen: AppScreen,
-    val icon: ImageVector
+    val iconAsset: String
 )
 
 @Composable
@@ -195,14 +202,14 @@ fun AppBikeApp(
 
     val destinations = remember {
         listOf(
-            MainDestination("Mapas", AppScreen.ROUTES, Icons.Outlined.Map),
+            MainDestination("Mapas", AppScreen.ROUTES, "navigation/mapas-logo.png"),
             MainDestination(
                 "Bicicletas",
                 AppScreen.BIKES,
-                Icons.AutoMirrored.Outlined.DirectionsBike
+                "navigation/bicicletas-logo.png"
             ),
-            MainDestination("Marketplace", AppScreen.MARKETPLACE, Icons.Outlined.Storefront),
-            MainDestination("Chat", AppScreen.CHAT, Icons.Outlined.ChatBubbleOutline)
+            MainDestination("Marketplace", AppScreen.MARKETPLACE, "navigation/marketplace-logo.png"),
+            MainDestination("Chat", AppScreen.CHAT, "navigation/chat-logo.png")
         )
     }
 
@@ -415,13 +422,14 @@ private fun AppTopBar(
 ) {
     Surface(
         modifier = Modifier.statusBarsPadding(),
-        color = MaterialTheme.colorScheme.background,
-        tonalElevation = 0.dp
+        color = AppBackgroundElevated,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(horizontal = 20.dp, vertical = 14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -430,22 +438,22 @@ private fun AppTopBar(
                     text = "APPBIKE",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Black,
-                    color = MaterialTheme.colorScheme.primary
+                    color = AppTextPrimary
                 )
                 Spacer(Modifier.height(1.dp))
                 Text(
-                    text = "Muévete. Conecta. Disfruta.",
+                    text = "Rendimiento. Ruta. Comunidad.",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = AppPrimaryBright
                 )
             }
 
             Surface(
                 shape = MaterialTheme.shapes.large,
                 color = if (accountSelected) {
-                    MaterialTheme.colorScheme.primaryContainer
+                    AppPrimarySoft
                 } else {
-                    MaterialTheme.colorScheme.surfaceContainer
+                    AppSurfaceElevated
                 }
             ) {
                 IconButton(onClick = onAccountClick) {
@@ -458,8 +466,12 @@ private fun AppTopBar(
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.PersonOutline,
-                            contentDescription = "Cuenta y sincronización",
-                            tint = MaterialTheme.colorScheme.onSurface
+                            contentDescription = "Cuenta y sincronizacion",
+                            tint = if (accountSelected) {
+                                AppPrimaryBright
+                            } else {
+                                AppTextPrimary
+                            }
                         )
                     }
                 }
@@ -475,9 +487,15 @@ private fun AppBottomBar(
     unreadMessages: Int,
     onNavigate: (AppScreen) -> Unit
 ) {
-    Surface(shadowElevation = 12.dp) {
+    Surface(
+        modifier = Modifier.navigationBarsPadding(),
+        color = AppBackgroundElevated,
+        shadowElevation = 8.dp,
+        tonalElevation = 0.dp
+    ) {
         NavigationBar(
-            containerColor = MaterialTheme.colorScheme.surface
+            containerColor = AppBackgroundElevated,
+            tonalElevation = 0.dp
         ) {
             destinations.forEach { destination ->
                 val selected = currentScreen == destination.screen ||
@@ -495,23 +513,36 @@ private fun AppBottomBar(
                                 }
                             }
                         ) {
-                            Icon(
-                                imageVector = destination.icon,
-                                contentDescription = destination.label,
-                                modifier = Modifier.size(24.dp)
+                            NavigationLogoIcon(
+                                assetPath = destination.iconAsset
                             )
                         }
                     },
                     label = { Text(destination.label, maxLines = 1) },
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                        selectedTextColor = MaterialTheme.colorScheme.primary,
-                        indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        selectedIconColor = AppTextPrimary,
+                        selectedTextColor = AppPrimaryBright,
+                        indicatorColor = AppPrimarySoft,
+                        unselectedIconColor = AppTextSecondary,
+                        unselectedTextColor = AppTextSecondary
                     )
                 )
             }
         }
     }
+}
+
+@Composable
+private fun NavigationLogoIcon(assetPath: String) {
+    val context = LocalContext.current
+    val image = remember(assetPath) {
+        context.assets.open(assetPath).use(BitmapFactory::decodeStream).asImageBitmap()
+    }
+
+    Image(
+        bitmap = image,
+        contentDescription = null,
+        modifier = Modifier.size(28.dp),
+        contentScale = ContentScale.Fit
+    )
 }

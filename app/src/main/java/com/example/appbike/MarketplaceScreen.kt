@@ -1,4 +1,4 @@
-package com.example.appbike
+﻿package com.example.appbike
 
 import android.content.Intent
 import android.graphics.Bitmap
@@ -14,6 +14,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -43,12 +44,12 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -57,6 +58,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -78,6 +81,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.appbike.ui.theme.AppBackgroundElevated
+import com.example.appbike.ui.theme.AppBorderActive
+import com.example.appbike.ui.theme.AppBorderSubtle
+import com.example.appbike.ui.theme.AppPrimary
+import com.example.appbike.ui.theme.AppPrimaryBright
+import com.example.appbike.ui.theme.AppPrimarySoft
+import com.example.appbike.ui.theme.AppSurfaceElevated
+import com.example.appbike.ui.theme.AppTextPrimary
+import com.example.appbike.ui.theme.AppTextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -88,7 +100,7 @@ private val MARKETPLACE_STATUSES = listOf(
     "activa" to "Activas",
     "pausada" to "Pausadas",
     "vendida" to "Vendidas",
-    "en_revision" to "En revisión"
+    "en_revision" to "En revisiÃ³n"
 )
 private const val MARKETPLACE_LOADING_MIN_MS = 450L
 
@@ -117,7 +129,7 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
 
     fun refresh(fromPull: Boolean = false) {
         val center = location ?: run {
-            error = "Elige una ubicación para Marketplace."
+            error = "Elige una ubicaciÃ³n para Marketplace."
             return
         }
         val requestedQuery = query
@@ -177,7 +189,7 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
             runCatching {
                 withContext(Dispatchers.IO) {
                     RemoteConnections.updateMarketplaceStatus(
-                        account?.userId ?: throw IllegalStateException("Inicia sesión."),
+                        account?.userId ?: throw IllegalStateException("Inicia sesiÃ³n."),
                         publicationId,
                         status
                     )
@@ -198,7 +210,7 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
                 withContext(Dispatchers.IO) {
                     RemoteConnections.uploadMarketplacePhoto(
                         context,
-                        account?.userId ?: throw IllegalStateException("Inicia sesión."),
+                        account?.userId ?: throw IllegalStateException("Inicia sesiÃ³n."),
                         publicationId,
                         imageUri
                     )
@@ -214,7 +226,7 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
 
     fun contactSeller(publication: ProductPublication) {
         val session = account ?: run {
-            detailError = "Inicia sesión para contactar al vendedor."
+            detailError = "Inicia sesiÃ³n para contactar al vendedor."
             return
         }
         scope.launch {
@@ -248,49 +260,77 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
 
     val currency = marketplaceCurrencyFor(location)
 
-    Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 8.dp)) {
-            OutlinedTextField(
+    PremiumScreenBackground(PremiumGlowStyle.Marketplace) {
+        Box(Modifier.fillMaxSize()) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(horizontal = AppDimens.Space4)
+                .padding(top = AppDimens.Space3, bottom = AppDimens.Space5),
+            verticalArrangement = Arrangement.spacedBy(AppDimens.Space3)
+        ) {
+            SearchField(
                 value = query,
                 onValueChange = { query = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Buscar en Marketplace") },
+                placeholder = "Buscar en Marketplace",
                 leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
                 trailingIcon = {
                     IconButton(onClick = { refresh() }, enabled = !loading) {
                         Icon(Icons.Outlined.Search, contentDescription = "Buscar")
                     }
                 },
-                singleLine = true,
-                shape = RoundedCornerShape(18.dp),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { refresh() })
             )
 
-            OutlinedButton(
-                onClick = { showLocationPicker = true },
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                shape = RoundedCornerShape(16.dp)
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showLocationPicker = true },
+                shape = RoundedCornerShape(AppDimens.RadiusLarge),
+                color = AppSurfaceElevated,
+                border = androidx.compose.foundation.BorderStroke(1.dp, AppBorderSubtle)
             ) {
-                Icon(Icons.Outlined.LocationOn, contentDescription = null)
-                Text(
-                    text = location?.let {
-                        "Marketplace en ${marketplaceLocationLabel(it)} · ${currency.code}"
-                    } ?: "Elegir ubicación de Marketplace",
-                    modifier = Modifier.padding(start = 8.dp).weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(
+                    modifier = Modifier.padding(
+                        horizontal = AppDimens.Space4,
+                        vertical = AppDimens.Space3
+                    ),
+                    horizontalArrangement = Arrangement.spacedBy(AppDimens.Space3),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Outlined.LocationOn,
+                        contentDescription = null,
+                        tint = AppPrimaryBright
+                    )
+                    Text(
+                        text = location?.let { "Marketplace en ${marketplaceLocationLabel(it)}" }
+                            ?: "Elegir ubicación de Marketplace",
+                        modifier = Modifier.weight(1f),
+                        color = AppTextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(AppDimens.RadiusPill),
+                        color = AppPrimarySoft
+                    ) {
+                        Text(
+                            currency.code,
+                            modifier = Modifier.padding(
+                                horizontal = AppDimens.Space3,
+                                vertical = AppDimens.Space1
+                            ),
+                            color = AppPrimaryBright,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
 
-            error?.let {
-                Text(
-                    it,
-                    modifier = Modifier.padding(bottom = 8.dp),
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
+            error?.let { ErrorBanner(it) }
 
             PullToRefreshBox(
                 isRefreshing = pullRefreshing,
@@ -299,24 +339,32 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
             ) {
                 when {
                     posts.isEmpty() && !loading -> Box(
-                        Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
+                        Modifier
+                            .fillMaxSize()
+                            .padding(top = AppDimens.Space4, bottom = AppDimens.Space10),
+                        contentAlignment = Alignment.TopCenter
                     ) {
-                        Text(
-                            if (location == null) {
-                                "Elige una ubicación para Marketplace."
+                        MarketplaceEmptyState(
+                            title = if (location == null) {
+                                "Elige una ubicación"
                             } else {
-                                "No hay publicaciones disponibles en esta ubicación."
+                                "No hay publicaciones en esta ubicación"
                             },
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            description = if (location == null) {
+                                "Define dónde buscar para ver productos cercanos."
+                            } else {
+                                "Prueba cambiando la ubicación o vuelve a intentarlo más tarde."
+                            },
+                            onChangeLocation = { showLocationPicker = true }
                         )
                     }
 
                     posts.isNotEmpty() -> LazyVerticalGrid(
                         columns = GridCells.Fixed(2),
                         modifier = Modifier.fillMaxSize(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        contentPadding = PaddingValues(bottom = AppDimens.Space8),
+                        horizontalArrangement = Arrangement.spacedBy(AppDimens.Space3),
+                        verticalArrangement = Arrangement.spacedBy(AppDimens.Space3)
                     ) {
                         items(posts, key = { it.id }) { post ->
                             MarketplaceCard(post) { openDetail(post.id) }
@@ -330,19 +378,25 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
             Surface(
                 modifier = Modifier.align(Alignment.Center),
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 8.dp
+                color = AppBackgroundElevated,
+                border = androidx.compose.foundation.BorderStroke(1.dp, AppBorderSubtle),
+                shadowElevation = 4.dp
             ) {
                 CircularProgressIndicator(
                     modifier = Modifier.padding(16.dp).size(36.dp),
-                    strokeWidth = 3.dp
+                    strokeWidth = 3.dp,
+                    color = AppPrimaryBright
                 )
             }
         }
 
-        FloatingActionButton(
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp),
+        SmallFloatingActionButton(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = AppDimens.Space4, bottom = AppDimens.Space1),
             shape = CircleShape,
+            containerColor = AppPrimary,
+            contentColor = AppTextPrimary,
             onClick = {
                 when {
                     account == null -> error = "Inicia sesión para publicar."
@@ -351,7 +405,7 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
                 }
             }
         ) {
-            Icon(Icons.Outlined.Add, contentDescription = "Crear publicación")
+            Icon(Icons.Outlined.Add, contentDescription = "Crear publicaciÃ³n")
         }
 
         if (detailLoading && detail == null) {
@@ -367,7 +421,7 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
         if (showLocationPicker) {
             LocationSearchDialog(
                 initial = location?.label.orEmpty(),
-                message = "Esta ubicación se usará solo en Marketplace y no cambiará la de Juntas.",
+                message = "Esta ubicaciÃ³n se usarÃ¡ solo en Marketplace y no cambiarÃ¡ la de Juntas.",
                 onDismiss = { showLocationPicker = false },
                 onLocation = { point ->
                     location = point
@@ -385,6 +439,7 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
                     }
                 }
             )
+        }
         }
     }
 
@@ -447,15 +502,62 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
 }
 
 @Composable
+private fun MarketplaceEmptyState(
+    title: String,
+    description: String,
+    onChangeLocation: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(AppDimens.Space4),
+        shape = RoundedCornerShape(AppDimens.RadiusLarge),
+        color = AppSurfaceElevated,
+        border = androidx.compose.foundation.BorderStroke(1.dp, AppBorderActive.copy(alpha = 0.32f))
+    ) {
+        Column(
+            modifier = Modifier.padding(AppDimens.Space4),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(AppDimens.Space2)
+        ) {
+            Icon(
+                Icons.Outlined.Image,
+                contentDescription = null,
+                tint = AppPrimaryBright,
+                modifier = Modifier.size(28.dp)
+            )
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = AppTextPrimary,
+                maxLines = 2
+            )
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = AppTextSecondary,
+                maxLines = 2
+            )
+            TextButton(onClick = onChangeLocation) {
+                Text("Cambiar ubicación", color = AppPrimaryBright)
+            }
+        }
+    }
+}
+
+@Composable
 private fun MarketplaceCard(
     post: ProductPublication,
     onClick: () -> Unit
 ) {
     Surface(
         modifier = Modifier.clickable(onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 2.dp
+        shape = RoundedCornerShape(AppDimens.RadiusLarge),
+        color = AppSurfaceElevated,
+        border = androidx.compose.foundation.BorderStroke(1.dp, AppBorderSubtle),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
         Column {
             MarketplaceRemoteImage(
@@ -463,21 +565,27 @@ private fun MarketplaceCard(
                 publicationId = post.id
             )
             Column(
-                Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                Modifier.padding(AppDimens.Space3),
+                verticalArrangement = Arrangement.spacedBy(AppDimens.Space1)
             ) {
-                Text(post.title, fontWeight = FontWeight.Bold, maxLines = 2)
+                Text(
+                    post.title,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    color = AppTextPrimary
+                )
                 Text(
                     publicationSellerName(post),
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = AppTextSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 if (post.productStatus.isNotBlank()) {
                     Text(
                         post.productStatus.replaceFirstChar(Char::uppercase),
-                        style = MaterialTheme.typography.bodySmall
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppTextSecondary
                     )
                 }
                 if (post.price.isNotBlank()) {
@@ -486,7 +594,7 @@ private fun MarketplaceCard(
                             post.price,
                             marketplaceCurrency(post.currencyCode)
                         ),
-                        color = MaterialTheme.colorScheme.primary,
+                        color = AppPrimaryBright,
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -495,7 +603,7 @@ private fun MarketplaceCard(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = AppTextSecondary
                 )
             }
         }
@@ -661,7 +769,7 @@ private fun MarketplaceDetailScreen(
 
                         HorizontalDivider()
                         Text(
-                            "Descripción",
+                            "DescripciÃ³n",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -681,7 +789,7 @@ private fun MarketplaceDetailScreen(
                                     tint = MaterialTheme.colorScheme.primary
                                 )
                                 Column {
-                                    Text("Ubicación", fontWeight = FontWeight.SemiBold)
+                                    Text("UbicaciÃ³n", fontWeight = FontWeight.SemiBold)
                                     Text(
                                         publication.location.substringAfter(
                                             '|',
@@ -718,7 +826,7 @@ private fun MarketplaceDetailScreen(
                         if (isOwner) {
                             HorizontalDivider()
                             Text(
-                                "Administrar publicación",
+                                "Administrar publicaciÃ³n",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
@@ -760,7 +868,7 @@ private fun MarketplaceDetailScreen(
                                         arrayOf("image/jpeg", "image/png", "image/webp")
                                     )
                                 }
-                            ) { Text("Agregar fotografía") }
+                            ) { Text("Agregar fotografÃ­a") }
                         } else {
                             Button(
                                 modifier = Modifier.weight(1f).height(50.dp),
@@ -769,7 +877,7 @@ private fun MarketplaceDetailScreen(
                             ) {
                                 Text(
                                     if (account == null) {
-                                        "Inicia sesión para contactar"
+                                        "Inicia sesiÃ³n para contactar"
                                     } else {
                                         "Contactar al vendedor"
                                     }
@@ -835,7 +943,7 @@ private fun CreateMarketplaceDialog(
                 modifier = Modifier.padding(20.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("Crear publicación", style = MaterialTheme.typography.headlineMedium)
+                Text("Crear publicaciÃ³n", style = MaterialTheme.typography.headlineMedium)
                 AppInput("Nombre del producto", title) { title = it }
                 ProductStatusSelector(
                     selectedStatus = productStatus,
@@ -857,17 +965,24 @@ private fun CreateMarketplaceDialog(
                     ),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .appBikeTextFieldGlow(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = appBikeTextFieldColors()
                 )
                 OutlinedTextField(
                     value = description,
                     onValueChange = { description = it },
-                    label = { Text("Descripción") },
-                    modifier = Modifier.fillMaxWidth().height(120.dp),
-                    shape = RoundedCornerShape(16.dp)
+                    label = { Text("DescripciÃ³n") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp)
+                        .appBikeTextFieldGlow(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = appBikeTextFieldColors()
                 )
-                Text("Fotografía del producto", fontWeight = FontWeight.Bold)
+                Text("FotografÃ­a del producto", fontWeight = FontWeight.Bold)
                 MarketplaceLocalImage(imageUri)
                 Button(
                     modifier = Modifier.fillMaxWidth(),
@@ -876,8 +991,8 @@ private fun CreateMarketplaceDialog(
                     }
                 ) {
                     Text(
-                        if (imageUri.isBlank()) "Seleccionar fotografía"
-                        else "Cambiar fotografía"
+                        if (imageUri.isBlank()) "Seleccionar fotografÃ­a"
+                        else "Cambiar fotografÃ­a"
                     )
                 }
                 Row(
@@ -981,7 +1096,7 @@ private fun ProductImage(
     if (bitmap != null) {
         Image(
             bitmap = bitmap.asImageBitmap(),
-            contentDescription = "Fotografía del producto",
+            contentDescription = "FotografÃ­a del producto",
             modifier = modifier,
             contentScale = ContentScale.Crop
         )
@@ -995,7 +1110,7 @@ private fun ProductImage(
         ) {
             Icon(
                 Icons.Outlined.Image,
-                contentDescription = "Sin fotografía",
+                contentDescription = "Sin fotografÃ­a",
                 modifier = Modifier.size(44.dp)
             )
         }
@@ -1011,7 +1126,7 @@ private fun marketplacePublishedLabel(raw: String): String {
         """^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})"""
     ).find(raw.trim()) ?: return raw
     val (year, month, day, hour, minute) = match.destructured
-    return "$day/$month/$year · $hour:$minute"
+    return "$day/$month/$year Â· $hour:$minute"
 }
 
 private fun marketplaceLocationLabel(point: GeoPoint): String = point.label
