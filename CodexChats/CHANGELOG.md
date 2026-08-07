@@ -1,5 +1,36 @@
 # Registro de cambios de CodexChats
 
+## 2026-08-07 - Roadmap manual de finalización
+
+Objetivo:
+
+- Dejar un plan ejecutable para que un equipo de desarrollo complete APPbike
+  sin depender de IA ni de contexto conversacional.
+
+Cambios:
+
+- Se agregó `docs/ROADMAP_FINALIZACION_MANUAL.md` con fases ordenadas por
+  dependencia, responsables, entregables, criterios de aceptación, riesgos y
+  puerta de release.
+- El plan distingue funciones ya verificadas de contratos que existen en Android
+  pero aún requieren backend, credenciales o pruebas autenticadas reales.
+
+Pruebas:
+
+- El roadmap se contrastó con `AGENTS.md`, el estado técnico, los contratos de
+  backend, los contratos de Mapas/Marketplace/Chat y las referencias actuales
+  de código y pruebas.
+
+Pendientes:
+
+- El equipo debe ejecutar la fase 0: definir tablero, entornos de prueba, CI y
+  rama de release.
+
+Siguiente paso:
+
+- Convertir la fase 0 en issues asignadas y estimadas antes de iniciar cambios
+  de backend o Android.
+
 ## 2026-08-07 - Publicacion de la actualizacion Android en GitHub
 
 Objetivo:
