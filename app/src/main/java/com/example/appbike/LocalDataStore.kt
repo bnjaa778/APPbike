@@ -1,6 +1,7 @@
 package com.example.appbike
 
 import android.content.Context
+import androidx.core.content.edit
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
@@ -51,10 +52,9 @@ object LocalDataStore {
     }
 
     private fun saveGeoPoint(context: Context, key: String, point: GeoPoint) {
-        prefs(context).edit().putString(
-            key,
-            geoPointToJson(point).toString()
-        ).apply()
+        prefs(context).edit {
+            putString(key, geoPointToJson(point).toString())
+        }
     }
 
     private fun rememberLocation(
@@ -128,7 +128,7 @@ object LocalDataStore {
                     ).ifBlank { null }
                 )
             }.getOrNull()
-        }
+        }.filter { it.id.isNotBlank() }
 
     fun saveChats(context: Context, userId: String, chats: List<UserChat>) {
         writeArray(context, "$CHATS:$userId", chats.map { chat ->
@@ -162,6 +162,11 @@ object LocalDataStore {
                     senderUsername = item.optString("senderUsername").ifBlank { null }
                 )
             }.getOrNull()
+        }.filter { message ->
+            message.id.isNotBlank() &&
+                (message.chatId.isBlank() || message.chatId == chatId)
+        }.map { message ->
+            if (message.chatId.isBlank()) message.copy(chatId = chatId) else message
         }
 
     fun saveMessages(
@@ -198,15 +203,17 @@ object LocalDataStore {
     }
 
     fun saveSync(context: Context, userId: String, metadata: ChatSyncMetadata) {
-        prefs(context).edit().putString(
-            "$SYNC:$userId:${metadata.chatId}",
-            JSONObject()
+        prefs(context).edit {
+            putString(
+                "$SYNC:$userId:${metadata.chatId}",
+                JSONObject()
                 .put("lastMessageId", metadata.lastMessageId)
                 .put("messageCount", metadata.messageCount)
                 .put("version", metadata.version)
                 .put("lastSync", metadata.lastSync)
                 .toString()
-        ).apply()
+            )
+        }
     }
 
     fun loadNotificationSync(
@@ -235,14 +242,16 @@ object LocalDataStore {
         userId: String,
         metadata: ChatNotificationSyncMetadata
     ) {
-        prefs(context).edit().putString(
-            "$NOTIFICATION_SYNC:$userId:${metadata.chatId}",
-            JSONObject()
+        prefs(context).edit {
+            putString(
+                "$NOTIFICATION_SYNC:$userId:${metadata.chatId}",
+                JSONObject()
                 .put("lastMessageId", metadata.lastMessageId)
                 .put("messageCount", metadata.messageCount)
                 .put("version", metadata.version)
                 .toString()
-        ).apply()
+            )
+        }
     }
 
     private fun prefs(context: Context) =
@@ -261,7 +270,7 @@ object LocalDataStore {
     }
 
     private fun writeArray(context: Context, key: String, values: List<JSONObject>) {
-        prefs(context).edit().putString(key, JSONArray(values).toString()).apply()
+        prefs(context).edit { putString(key, JSONArray(values).toString()) }
     }
 
     private fun JSONArray?.strings(): List<String> {
@@ -289,5 +298,19 @@ internal fun mergeStoredMessages(
     local: List<StoredMessage>,
     downloaded: List<StoredMessage>
 ): List<StoredMessage> = (local + downloaded)
-    .distinctBy(StoredMessage::id)
-    .sortedWith(compareBy<StoredMessage> { it.createdAt }.thenBy { it.id })
+    .associateBy(StoredMessage::id)
+    .values
+    .sortedWith { first, second ->
+        val createdAtOrder = first.createdAt.compareTo(second.createdAt)
+        if (createdAtOrder != 0) createdAtOrder else compareRemoteIds(first.id, second.id)
+    }
+
+internal fun compareRemoteIds(first: String, second: String): Int {
+    val firstNumber = first.toBigIntegerOrNull()
+    val secondNumber = second.toBigIntegerOrNull()
+    return if (firstNumber != null && secondNumber != null) {
+        firstNumber.compareTo(secondNumber)
+    } else {
+        first.compareTo(second)
+    }
+}

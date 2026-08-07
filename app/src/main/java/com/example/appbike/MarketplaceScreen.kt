@@ -2,8 +2,6 @@
 
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -64,6 +62,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,6 +73,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -81,6 +81,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.net.toUri
 import com.example.appbike.ui.theme.AppBackgroundElevated
 import com.example.appbike.ui.theme.AppBorderActive
 import com.example.appbike.ui.theme.AppBorderSubtle
@@ -94,19 +95,23 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.net.URL
 
 private val MARKETPLACE_STATUSES = listOf(
     "activa" to "Activas",
     "pausada" to "Pausadas",
     "vendida" to "Vendidas",
-    "en_revision" to "En revisiÃ³n"
+    "en_revision" to "En revisión"
 )
 private const val MARKETPLACE_LOADING_MIN_MS = 450L
+internal const val MARKETPLACE_DETAIL_HERO_TEST_TAG = "marketplace_detail_hero"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) {
+fun MarketplaceScreen(
+    account: AccountSession?,
+    onOpenChat: (UserChat) -> Unit = {},
+    onOpenAccount: () -> Unit = {}
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val posts = remember { mutableStateListOf<ProductPublication>() }
@@ -119,17 +124,21 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
     var query by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var pullRefreshing by remember { mutableStateOf(false) }
-    var refreshRequestId by remember { mutableStateOf(0) }
+    var refreshRequestId by remember { mutableIntStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
     var showCreate by remember { mutableStateOf(false) }
+    var createLoading by remember { mutableStateOf(false) }
+    var createError by remember { mutableStateOf<String?>(null) }
     var showLocationPicker by remember { mutableStateOf(false) }
     var detail by remember { mutableStateOf<ProductPublication?>(null) }
     var detailLoading by remember { mutableStateOf(false) }
     var detailError by remember { mutableStateOf<String?>(null) }
+    var detailRequestId by remember { mutableIntStateOf(0) }
+    var locationChangeId by remember { mutableIntStateOf(0) }
 
     fun refresh(fromPull: Boolean = false) {
         val center = location ?: run {
-            error = "Elige una ubicaciÃ³n para Marketplace."
+            error = "Elige una ubicación para Marketplace."
             return
         }
         val requestedQuery = query
@@ -140,7 +149,7 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
             pullRefreshing = fromPull
             error = null
             val startedAt = System.nanoTime()
-            val result = runCatching {
+            val result = runSuspendCatching {
                 withContext(Dispatchers.IO) {
                     RemoteConnections.loadMarketplacePosts(
                         center = center,
@@ -165,15 +174,19 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
     }
 
     fun openDetail(publicationId: String) {
+        val requestId = detailRequestId + 1
+        detailRequestId = requestId
         scope.launch {
             detail = null
             detailLoading = true
             detailError = null
-            runCatching {
+            val result = runSuspendCatching {
                 withContext(Dispatchers.IO) {
                     RemoteConnections.loadMarketplaceDetails(publicationId)
                 }
-            }.onSuccess { detail = it }
+            }
+            if (requestId != detailRequestId) return@launch
+            result.onSuccess { detail = it }
                 .onFailure {
                     detailError = RemoteConnections.userFriendlyError(it)
                     error = detailError
@@ -186,10 +199,10 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
         scope.launch {
             detailLoading = true
             detailError = null
-            runCatching {
+            runSuspendCatching {
                 withContext(Dispatchers.IO) {
                     RemoteConnections.updateMarketplaceStatus(
-                        account?.userId ?: throw IllegalStateException("Inicia sesiÃ³n."),
+                        account?.userId ?: throw IllegalStateException("Inicia sesión."),
                         publicationId,
                         status
                     )
@@ -206,11 +219,11 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
         scope.launch {
             detailLoading = true
             detailError = null
-            runCatching {
+            runSuspendCatching {
                 withContext(Dispatchers.IO) {
                     RemoteConnections.uploadMarketplacePhoto(
                         context,
-                        account?.userId ?: throw IllegalStateException("Inicia sesiÃ³n."),
+                        account?.userId ?: throw IllegalStateException("Inicia sesión."),
                         publicationId,
                         imageUri
                     )
@@ -226,13 +239,13 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
 
     fun contactSeller(publication: ProductPublication) {
         val session = account ?: run {
-            detailError = "Inicia sesiÃ³n para contactar al vendedor."
+            onOpenAccount()
             return
         }
         scope.launch {
             detailLoading = true
             detailError = null
-            runCatching {
+            runSuspendCatching {
                 withContext(Dispatchers.IO) {
                     RemoteConnections.getOrCreateChat(
                         userId = session.userId,
@@ -345,17 +358,25 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
                         contentAlignment = Alignment.TopCenter
                     ) {
                         MarketplaceEmptyState(
-                            title = if (location == null) {
-                                "Elige una ubicación"
-                            } else {
-                                "No hay publicaciones en esta ubicación"
+                            title = when {
+                                location == null -> "Elige una ubicación"
+                                error != null -> "No pudimos cargar Marketplace"
+                                else -> "No hay publicaciones en esta ubicación"
                             },
-                            description = if (location == null) {
-                                "Define dónde buscar para ver productos cercanos."
-                            } else {
-                                "Prueba cambiando la ubicación o vuelve a intentarlo más tarde."
+                            description = when {
+                                location == null ->
+                                    "Define dónde buscar para ver productos cercanos."
+                                error != null ->
+                                    "Revisa tu conexión y vuelve a intentarlo."
+                                else ->
+                                    "Prueba cambiando la ubicación o vuelve a intentarlo más tarde."
                             },
-                            onChangeLocation = { showLocationPicker = true }
+                            onChangeLocation = { showLocationPicker = true },
+                            onRetry = if (error != null && location != null) {
+                                { refresh() }
+                            } else {
+                                null
+                            }
                         )
                     }
 
@@ -399,13 +420,16 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
             contentColor = AppTextPrimary,
             onClick = {
                 when {
-                    account == null -> error = "Inicia sesión para publicar."
+                    account == null -> onOpenAccount()
                     location == null -> error = "Elige una ubicación para Marketplace."
-                    else -> showCreate = true
+                    else -> {
+                        createError = null
+                        showCreate = true
+                    }
                 }
             }
         ) {
-            Icon(Icons.Outlined.Add, contentDescription = "Crear publicaciÃ³n")
+            Icon(Icons.Outlined.Add, contentDescription = "Crear publicación")
         }
 
         if (detailLoading && detail == null) {
@@ -421,9 +445,11 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
         if (showLocationPicker) {
             LocationSearchDialog(
                 initial = location?.label.orEmpty(),
-                message = "Esta ubicaciÃ³n se usarÃ¡ solo en Marketplace y no cambiarÃ¡ la de Juntas.",
+                message = "Esta ubicación se usará solo en Marketplace y no cambiará la de Juntas.",
                 onDismiss = { showLocationPicker = false },
                 onLocation = { point ->
+                    val changeId = locationChangeId + 1
+                    locationChangeId = changeId
                     location = point
                     LocalDataStore.saveMarketplaceLocation(context, point)
                     showLocationPicker = false
@@ -432,6 +458,7 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
                         val resolved = withContext(Dispatchers.IO) {
                             RemoteConnections.resolveCommunityLocation(point)
                         }
+                        if (changeId != locationChangeId) return@launch
                         if (resolved != point) {
                             location = resolved
                             LocalDataStore.saveMarketplaceLocation(context, resolved)
@@ -447,12 +474,17 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
     if (showCreate && account != null && publicationLocation != null) {
         CreateMarketplaceDialog(
             currency = currency,
-            onDismiss = { showCreate = false },
+            isSaving = createLoading,
+            error = createError,
+            onDismiss = {
+                if (!createLoading) showCreate = false
+            },
             onCreate = { post ->
+                if (createLoading) return@CreateMarketplaceDialog
                 scope.launch {
-                    loading = true
-                    error = null
-                    runCatching {
+                    createLoading = true
+                    createError = null
+                    runSuspendCatching {
                         withContext(Dispatchers.IO) {
                             val region = RemoteConnections.communityRegionFor(publicationLocation)
                             RemoteConnections.createMarketplacePost(
@@ -475,8 +507,16 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
                         showCreate = false
                         refresh()
                         detail = it
-                    }.onFailure { error = RemoteConnections.userFriendlyError(it) }
-                    loading = false
+                    }.onFailure { failure ->
+                        if (failure is RemoteConnections.RemotePartialSuccessException) {
+                            showCreate = false
+                            error = RemoteConnections.userFriendlyError(failure)
+                            refresh()
+                        } else {
+                            createError = RemoteConnections.userFriendlyError(failure)
+                        }
+                    }
+                    createLoading = false
                 }
             }
         )
@@ -490,8 +530,10 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
             loading = detailLoading,
             error = detailError,
             onDismiss = {
+                detailRequestId += 1
                 detail = null
                 detailError = null
+                detailLoading = false
             },
             onStatus = { changeStatus(publication.id, it) },
             onAddPhoto = { addPhoto(publication.id, it) },
@@ -505,7 +547,8 @@ fun MarketplaceScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit =
 private fun MarketplaceEmptyState(
     title: String,
     description: String,
-    onChangeLocation: () -> Unit
+    onChangeLocation: () -> Unit,
+    onRetry: (() -> Unit)? = null
 ) {
     Surface(
         modifier = Modifier
@@ -539,8 +582,15 @@ private fun MarketplaceEmptyState(
                 color = AppTextSecondary,
                 maxLines = 2
             )
-            TextButton(onClick = onChangeLocation) {
-                Text("Cambiar ubicación", color = AppPrimaryBright)
+            Row(horizontalArrangement = Arrangement.spacedBy(AppDimens.Space2)) {
+                onRetry?.let { retry ->
+                    TextButton(onClick = retry) {
+                        Text("Reintentar", color = AppPrimaryBright)
+                    }
+                }
+                TextButton(onClick = onChangeLocation) {
+                    Text("Cambiar ubicación", color = AppPrimaryBright)
+                }
             }
         }
     }
@@ -562,7 +612,8 @@ private fun MarketplaceCard(
         Column {
             MarketplaceRemoteImage(
                 url = post.images.firstOrNull(),
-                publicationId = post.id
+                publicationId = post.id,
+                modifier = Modifier.fillMaxWidth().aspectRatio(1.55f)
             )
             Column(
                 Modifier.padding(AppDimens.Space3),
@@ -611,7 +662,7 @@ private fun MarketplaceCard(
 }
 
 @Composable
-private fun MarketplaceDetailScreen(
+internal fun MarketplaceDetailScreen(
     publication: ProductPublication,
     currency: MarketplaceCurrency,
     account: AccountSession?,
@@ -624,7 +675,7 @@ private fun MarketplaceDetailScreen(
 ) {
     val context = LocalContext.current
     val isOwner = account?.userId == publication.createdBy
-    var selectedPhoto by remember(publication.id, publication.images) { mutableStateOf(0) }
+    var selectedPhoto by remember(publication.id, publication.images) { mutableIntStateOf(0) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching {
@@ -690,7 +741,13 @@ private fun MarketplaceDetailScreen(
                     MarketplaceRemoteImage(
                         url = publication.images.getOrNull(selectedPhoto),
                         publicationId = publication.id,
-                        modifier = Modifier.fillMaxWidth().height(340.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(
+                                if (publication.images.any(String::isNotBlank)) 340.dp
+                                else 180.dp
+                            )
+                            .testTag(MARKETPLACE_DETAIL_HERO_TEST_TAG)
                     )
 
                     if (publication.images.size > 1) {
@@ -769,7 +826,7 @@ private fun MarketplaceDetailScreen(
 
                         HorizontalDivider()
                         Text(
-                            "DescripciÃ³n",
+                            "Descripción",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -789,7 +846,7 @@ private fun MarketplaceDetailScreen(
                                     tint = MaterialTheme.colorScheme.primary
                                 )
                                 Column {
-                                    Text("UbicaciÃ³n", fontWeight = FontWeight.SemiBold)
+                                    Text("Ubicación", fontWeight = FontWeight.SemiBold)
                                     Text(
                                         publication.location.substringAfter(
                                             '|',
@@ -826,7 +883,7 @@ private fun MarketplaceDetailScreen(
                         if (isOwner) {
                             HorizontalDivider()
                             Text(
-                                "Administrar publicaciÃ³n",
+                                "Administrar publicación",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
@@ -868,16 +925,16 @@ private fun MarketplaceDetailScreen(
                                         arrayOf("image/jpeg", "image/png", "image/webp")
                                     )
                                 }
-                            ) { Text("Agregar fotografÃ­a") }
+                            ) { Text("Agregar fotografía") }
                         } else {
                             Button(
                                 modifier = Modifier.weight(1f).height(50.dp),
-                                enabled = !loading && account != null,
+                                enabled = !loading,
                                 onClick = onContact
                             ) {
                                 Text(
                                     if (account == null) {
-                                        "Inicia sesiÃ³n para contactar"
+                                        "Inicia sesión para contactar"
                                     } else {
                                         "Contactar al vendedor"
                                     }
@@ -894,12 +951,12 @@ private fun MarketplaceDetailScreen(
 @Composable
 private fun MarketplaceRemoteImage(
     url: String?,
-    publicationId: String = "",
-    modifier: Modifier = Modifier.fillMaxWidth().aspectRatio(1.55f)
+    modifier: Modifier = Modifier,
+    publicationId: String = ""
 ) {
     var bitmap by remember(url, publicationId) { mutableStateOf<android.graphics.Bitmap?>(null) }
     LaunchedEffect(url, publicationId) {
-        bitmap = runCatching {
+        bitmap = runSuspendCatching {
             withContext(Dispatchers.IO) {
                 url?.takeIf(String::isNotBlank)?.let(RemoteImageLoader::loadBitmap)
             }
@@ -911,6 +968,8 @@ private fun MarketplaceRemoteImage(
 @Composable
 private fun CreateMarketplaceDialog(
     currency: MarketplaceCurrency,
+    isSaving: Boolean,
+    error: String?,
     onDismiss: () -> Unit,
     onCreate: (ProductPublication) -> Unit
 ) {
@@ -934,7 +993,7 @@ private fun CreateMarketplaceDialog(
         }
     }
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(onDismissRequest = { if (!isSaving) onDismiss() }) {
         Surface(
             modifier = Modifier.fillMaxWidth().heightIn(max = 700.dp),
             shape = RoundedCornerShape(28.dp)
@@ -943,10 +1002,12 @@ private fun CreateMarketplaceDialog(
                 modifier = Modifier.padding(20.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("Crear publicaciÃ³n", style = MaterialTheme.typography.headlineMedium)
-                AppInput("Nombre del producto", title) { title = it }
+                Text("Crear publicación", style = MaterialTheme.typography.headlineMedium)
+                error?.let { ErrorBanner(it) }
+                AppInput("Nombre del producto", title, enabled = !isSaving) { title = it }
                 ProductStatusSelector(
                     selectedStatus = productStatus,
+                    enabled = !isSaving,
                     onStatusSelected = { productStatus = it }
                 )
                 OutlinedTextField(
@@ -965,6 +1026,7 @@ private fun CreateMarketplaceDialog(
                     ),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
+                    enabled = !isSaving,
                     modifier = Modifier
                         .fillMaxWidth()
                         .appBikeTextFieldGlow(),
@@ -974,7 +1036,8 @@ private fun CreateMarketplaceDialog(
                 OutlinedTextField(
                     value = description,
                     onValueChange = { description = it },
-                    label = { Text("DescripciÃ³n") },
+                    label = { Text("Descripción") },
+                    enabled = !isSaving,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(120.dp)
@@ -982,26 +1045,27 @@ private fun CreateMarketplaceDialog(
                     shape = RoundedCornerShape(14.dp),
                     colors = appBikeTextFieldColors()
                 )
-                Text("FotografÃ­a del producto", fontWeight = FontWeight.Bold)
+                Text("Fotografía del producto", fontWeight = FontWeight.Bold)
                 MarketplaceLocalImage(imageUri)
                 Button(
                     modifier = Modifier.fillMaxWidth(),
+                    enabled = !isSaving,
                     onClick = {
                         imagePicker.launch(arrayOf("image/jpeg", "image/png", "image/webp"))
                     }
                 ) {
                     Text(
-                        if (imageUri.isBlank()) "Seleccionar fotografÃ­a"
-                        else "Cambiar fotografÃ­a"
+                        if (imageUri.isBlank()) "Seleccionar fotografía"
+                        else "Cambiar fotografía"
                     )
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)
                 ) {
-                    OutlinedButton(onClick = onDismiss) { Text("Cancelar") }
+                    OutlinedButton(enabled = !isSaving, onClick = onDismiss) { Text("Cancelar") }
                     Button(
-                        enabled = title.isNotBlank() && productStatus.isNotBlank() &&
+                        enabled = !isSaving && title.isNotBlank() && productStatus.isNotBlank() &&
                             priceDigits.toLongOrNull()?.let { it > 0L } == true &&
                             description.isNotBlank(),
                         onClick = {
@@ -1020,7 +1084,13 @@ private fun CreateMarketplaceDialog(
                                 )
                             )
                         }
-                    ) { Text("Publicar") }
+                    ) {
+                        if (isSaving) {
+                            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text("Publicar")
+                        }
+                    }
                 }
             }
         }
@@ -1030,6 +1100,7 @@ private fun CreateMarketplaceDialog(
 @Composable
 internal fun ProductStatusSelector(
     selectedStatus: String,
+    enabled: Boolean = true,
     onStatusSelected: (String) -> Unit
 ) {
     val options = listOf(
@@ -1042,6 +1113,7 @@ internal fun ProductStatusSelector(
     Box(Modifier.fillMaxWidth()) {
         OutlinedButton(
             onClick = { expanded = true },
+            enabled = enabled,
             modifier = Modifier.fillMaxWidth().height(56.dp),
             shape = RoundedCornerShape(16.dp)
         ) {
@@ -1053,7 +1125,7 @@ internal fun ProductStatusSelector(
             Icon(Icons.Outlined.ArrowDropDown, contentDescription = null)
         }
         DropdownMenu(
-            expanded = expanded,
+            expanded = expanded && enabled,
             onDismissRequest = { expanded = false },
             modifier = Modifier.fillMaxWidth(0.82f)
         ) {
@@ -1078,25 +1150,26 @@ private fun MarketplaceLocalImage(imageUri: String) {
         bitmap = if (imageUri.isBlank()) null else {
             withContext(Dispatchers.IO) {
                 runCatching {
-                    context.contentResolver.openInputStream(Uri.parse(imageUri))?.use {
-                        BitmapFactory.decodeStream(it)
-                    }
+                    RemoteImageLoader.loadLocalBitmap(context, imageUri.toUri())
                 }.getOrNull()
             }
         }
     }
-    ProductImage(bitmap)
+    ProductImage(
+        bitmap = bitmap,
+        modifier = Modifier.fillMaxWidth().aspectRatio(1.55f)
+    )
 }
 
 @Composable
 private fun ProductImage(
     bitmap: Bitmap?,
-    modifier: Modifier = Modifier.fillMaxWidth().aspectRatio(1.55f)
+    modifier: Modifier = Modifier
 ) {
     if (bitmap != null) {
         Image(
             bitmap = bitmap.asImageBitmap(),
-            contentDescription = "FotografÃ­a del producto",
+            contentDescription = "Fotografía del producto",
             modifier = modifier,
             contentScale = ContentScale.Crop
         )
@@ -1110,7 +1183,7 @@ private fun ProductImage(
         ) {
             Icon(
                 Icons.Outlined.Image,
-                contentDescription = "Sin fotografÃ­a",
+                contentDescription = "Sin fotografía",
                 modifier = Modifier.size(44.dp)
             )
         }
@@ -1126,7 +1199,7 @@ private fun marketplacePublishedLabel(raw: String): String {
         """^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})"""
     ).find(raw.trim()) ?: return raw
     val (year, month, day, hour, minute) = match.destructured
-    return "$day/$month/$year Â· $hour:$minute"
+    return "$day/$month/$year · $hour:$minute"
 }
 
 private fun marketplaceLocationLabel(point: GeoPoint): String = point.label

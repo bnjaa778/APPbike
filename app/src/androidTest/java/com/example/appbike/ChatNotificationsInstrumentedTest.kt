@@ -18,18 +18,23 @@ class ChatNotificationsInstrumentedTest {
         assumeTrue(ChatNotificationCenter.canPostNotifications(context))
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.cancelAll()
-
-        ChatNotificationCenter.showSystemNotification(
-            context,
-            MessageNotificationEvent(
-                chatId = "notification-test-chat",
-                messageId = "notification-test-message",
-                chatType = ChatType.SOCIAL,
-                senderName = "ciclista.prueba",
-                message = "Mensaje de prueba",
-                chatTitle = "Chat de prueba"
-            )
+        val event = MessageNotificationEvent(
+            recipientUserId = "notification-test-user",
+            chatId = "notification-test-chat",
+            messageId = "notification-test-message",
+            chatType = ChatType.SOCIAL,
+            senderName = "ciclista.prueba",
+            message = "Mensaje de prueba",
+            chatTitle = "Chat de prueba"
         )
+        val targetIntent = ChatNotificationCenter.messageNotificationIntent(context, event)
+        assertEquals(
+            event.recipientUserId,
+            targetIntent.getStringExtra(ChatNotificationCenter.EXTRA_RECIPIENT_USER_ID)
+        )
+        assertEquals(event.chatId, targetIntent.getStringExtra(ChatNotificationCenter.EXTRA_CHAT_ID))
+
+        ChatNotificationCenter.showSystemNotification(context, event)
 
         val posted = manager.activeNotifications.firstOrNull()
         assertNotNull(posted)

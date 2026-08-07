@@ -10,6 +10,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -56,6 +57,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,12 +66,15 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -79,6 +84,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.zIndex
 import com.example.appbike.ui.theme.AppBackgroundElevated
 import com.example.appbike.ui.theme.AppBorderSubtle
 import com.example.appbike.ui.theme.AppPrimary
@@ -87,6 +93,7 @@ import com.example.appbike.ui.theme.AppSurfaceElevated
 import com.example.appbike.ui.theme.AppTextPrimary
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.graphics.drawable.DrawableCompat
+import androidx.core.graphics.createBitmap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
@@ -102,6 +109,7 @@ import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
+import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.PropertyFactory.iconAllowOverlap
 import org.maplibre.android.style.layers.PropertyFactory.iconIgnorePlacement
 import org.maplibre.android.style.layers.PropertyFactory.iconImage
@@ -112,9 +120,10 @@ import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.Point
 import kotlin.math.roundToInt
 
-private enum class MeetupCreationStep { CLOSED, SELECT_LOCATION, FORM }
+internal enum class MeetupCreationStep { CLOSED, SELECT_LOCATION, FORM }
 private enum class LocationSetupStep { READY, REQUESTING_PERMISSION, LOCATING, CONFIRM, MANUAL }
 private const val OPEN_FREE_MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty"
+internal const val LOCATION_SEARCH_PANEL_TEST_TAG = "location_search_panel"
 private const val USER_SOURCE_ID = "appbike-user-source"
 private const val USER_LAYER_ID = "appbike-user-layer"
 private const val USER_ICON_ID = "appbike-user-icon"
@@ -127,7 +136,11 @@ private const val SELECTED_ICON_ID = "appbike-selected-icon"
 private val DEFAULT_MAP_CENTER = GeoPoint(-33.4489, -70.6693, "Santiago")
 
 @Composable
-fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) {
+fun RoutesScreen(
+    account: AccountSession?,
+    onOpenChat: (UserChat) -> Unit = {},
+    onOpenAccount: () -> Unit = {}
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val storedLocation = remember { LocalDataStore.loadLocation(context) }
@@ -147,28 +160,37 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
     var query by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var showLoginRequired by remember { mutableStateOf(false) }
     var creationStep by remember { mutableStateOf(MeetupCreationStep.CLOSED) }
+    var creationLoading by remember { mutableStateOf(false) }
+    var creationError by remember { mutableStateOf<String?>(null) }
     var selectedPoint by remember { mutableStateOf<GeoPoint?>(null) }
     var meetupDetail by remember { mutableStateOf<MeetupEvent?>(null) }
     var meetupDetailLoading by remember { mutableStateOf(false) }
     var meetupDetailError by remember { mutableStateOf<String?>(null) }
+    var refreshRequestId by remember { mutableIntStateOf(0) }
+    var meetupDetailRequestId by remember { mutableIntStateOf(0) }
+    var locationCommitId by remember { mutableIntStateOf(0) }
     val meetups = remember { mutableStateListOf<MeetupEvent>() }
 
     fun refresh(point: GeoPoint = center) {
+        val requestedQuery = query
+        val requestId = refreshRequestId + 1
+        refreshRequestId = requestId
         scope.launch {
             isLoading = true
             error = null
-            runCatching {
+            val result = runSuspendCatching {
                 withContext(Dispatchers.IO) {
                     RemoteConnections.loadNearbyMeetups(
                         center = point,
-                        query = query,
+                        query = requestedQuery,
                         radiusKm = 40,
                         status = "activa"
                     )
                 }
-            }.onSuccess {
+            }
+            if (requestId != refreshRequestId) return@launch
+            result.onSuccess {
                 meetups.clear()
                 meetups.addAll(it)
             }.onFailure { error = RemoteConnections.userFriendlyError(it) }
@@ -177,14 +199,19 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
     }
 
     fun openMeetup(event: MeetupEvent) {
+        val requestId = meetupDetailRequestId + 1
+        meetupDetailRequestId = requestId
         scope.launch {
+            meetupDetail = null
             meetupDetailLoading = true
             meetupDetailError = null
-            runCatching {
+            val result = runSuspendCatching {
                 withContext(Dispatchers.IO) {
                     RemoteConnections.loadMeetupDetails(event.id)
                 }
-            }.onSuccess { meetupDetail = it }
+            }
+            if (requestId != meetupDetailRequestId) return@launch
+            result.onSuccess { meetupDetail = it }
                 .onFailure { meetupDetailError = RemoteConnections.userFriendlyError(it) }
             meetupDetailLoading = false
         }
@@ -194,7 +221,7 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
         scope.launch {
             meetupDetailLoading = true
             meetupDetailError = null
-            runCatching {
+            runSuspendCatching {
                 withContext(Dispatchers.IO) {
                     RemoteConnections.completeMeetup(
                         account?.userId ?: throw IllegalStateException("Inicia sesión."),
@@ -213,7 +240,7 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
         scope.launch {
             meetupDetailLoading = true
             meetupDetailError = null
-            runCatching {
+            runSuspendCatching {
                 withContext(Dispatchers.IO) {
                     RemoteConnections.uploadMeetupPhoto(
                         context,
@@ -233,13 +260,13 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
 
     fun contactOrganizer(event: MeetupEvent) {
         val session = account ?: run {
-            meetupDetailError = "Inicia sesión para contactar al organizador."
+            onOpenAccount()
             return
         }
         scope.launch {
             meetupDetailLoading = true
             meetupDetailError = null
-            runCatching {
+            runSuspendCatching {
                 withContext(Dispatchers.IO) {
                     RemoteConnections.getOrCreateChat(
                         userId = session.userId,
@@ -256,6 +283,8 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
     }
 
     fun commitLocation(point: GeoPoint) {
+        val commitId = locationCommitId + 1
+        locationCommitId = commitId
         userLocation = point
         pendingLocation = null
         center = point
@@ -267,6 +296,7 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
             val resolved = withContext(Dispatchers.IO) {
                 RemoteConnections.resolveCommunityLocation(point)
             }
+            if (commitId != locationCommitId) return@launch
             if (resolved != point) {
                 userLocation = resolved
                 center = resolved
@@ -280,7 +310,7 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
         locationSetupStep = LocationSetupStep.LOCATING
         locationSetupMessage = null
         scope.launch {
-            runCatching {
+            runSuspendCatching {
                 withContext(Dispatchers.IO) {
                     val devicePoint = DeviceLocationProvider.currentLocation(context)
                     runCatching {
@@ -331,25 +361,11 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
     val displayedLocation = pendingLocation ?: userLocation
 
     Box(Modifier.fillMaxSize()) {
-        OpenStreetMap(
-            modifier = Modifier.fillMaxSize(),
-            center = center,
-            userLocation = displayedLocation,
-            meetups = meetups.toList(),
-            selectedPoint = selectedPoint,
-            creationStep = creationStep,
-            onMapReady = {},
-            onPointSelected = { selectedPoint = it },
-            onMeetupSelected = ::openMeetup,
-            onMapError = {
-                error = "No fue posible cargar el mapa. Revisa tu conexión a internet."
-            }
-        )
-
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .zIndex(1f),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             SearchField(
@@ -387,34 +403,12 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
 
         }
 
-        if (isLoading) {
-            Surface(
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 132.dp),
-                shape = CircleShape,
-                color = AppBackgroundElevated,
-                border = androidx.compose.foundation.BorderStroke(1.dp, AppBorderSubtle),
-                shadowElevation = 4.dp
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.padding(10.dp).size(24.dp),
-                    strokeWidth = 2.dp,
-                    color = AppPrimaryBright
-                )
-            }
-        }
-
-        error?.let {
-            ErrorBanner(
-                message = it,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 136.dp, start = 24.dp, end = 24.dp)
-            )
-        }
-
         if (creationStep == MeetupCreationStep.SELECT_LOCATION) {
             Surface(
-                modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(16.dp)
+                    .zIndex(1f),
                 shape = RoundedCornerShape(22.dp),
                 color = AppSurfaceElevated,
                 border = androidx.compose.foundation.BorderStroke(
@@ -446,17 +440,63 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
             }
         } else {
             FloatingActionButton(
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 18.dp)
+                    .zIndex(1f),
                 shape = CircleShape,
                 containerColor = AppPrimary,
                 contentColor = AppTextPrimary,
                 onClick = {
-                    if (account == null) showLoginRequired = true
-                    else creationStep = MeetupCreationStep.SELECT_LOCATION
+                    if (account == null) onOpenAccount()
+                    else {
+                        creationError = null
+                        creationStep = MeetupCreationStep.SELECT_LOCATION
+                    }
                 }
             ) {
                 Icon(Icons.Outlined.Add, contentDescription = "Crear junta")
             }
+        }
+
+        OpenStreetMap(
+            modifier = Modifier.fillMaxSize(),
+            center = center,
+            userLocation = displayedLocation,
+            meetups = meetups.toList(),
+            selectedPoint = selectedPoint,
+            creationStep = creationStep,
+            onMapReady = {},
+            onPointSelected = { selectedPoint = it },
+            onMeetupSelected = ::openMeetup,
+            onMapError = {
+                error = "No fue posible cargar el mapa. Revisa tu conexión a internet."
+            }
+        )
+
+        if (isLoading) {
+            Surface(
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 132.dp),
+                shape = CircleShape,
+                color = AppBackgroundElevated,
+                border = androidx.compose.foundation.BorderStroke(1.dp, AppBorderSubtle),
+                shadowElevation = 4.dp
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.padding(10.dp).size(24.dp),
+                    strokeWidth = 2.dp,
+                    color = AppPrimaryBright
+                )
+            }
+        }
+
+        error?.let {
+            ErrorBanner(
+                message = it,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 136.dp, start = 24.dp, end = 24.dp)
+            )
         }
 
         if (locationSetupStep == LocationSetupStep.MANUAL) {
@@ -473,17 +513,6 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
                 onLocation = ::commitLocation
             )
         }
-    }
-
-    if (showLoginRequired) {
-        AlertDialog(
-            onDismissRequest = { showLoginRequired = false },
-            title = { Text("Inicio de sesión necesario") },
-            text = { Text("Inicia sesión para crear una junta.") },
-            confirmButton = {
-                Button(onClick = { showLoginRequired = false }) { Text("Entendido") }
-            }
-        )
     }
 
     when (locationSetupStep) {
@@ -504,15 +533,35 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
 
     if (creationStep == MeetupCreationStep.FORM && selectedPoint != null && account != null) {
         MeetupFormDialog(
-            onDismiss = { creationStep = MeetupCreationStep.SELECT_LOCATION },
+            isSaving = creationLoading,
+            error = creationError,
+            onDismiss = {
+                if (!creationLoading) creationStep = MeetupCreationStep.SELECT_LOCATION
+            },
             onCreate = { title, dateTime, description, imageUri ->
+                if (creationLoading) return@MeetupFormDialog
                 scope.launch {
-                    isLoading = true
-                    val point = selectedPoint ?: return@launch
-                    runCatching {
+                    creationLoading = true
+                    creationError = null
+                    val point = selectedPoint ?: run {
+                        creationLoading = false
+                        return@launch
+                    }
+                    runSuspendCatching {
                         withContext(Dispatchers.IO) {
+                            val selectedLocation = runCatching {
+                                RemoteConnections.reverseGeocodeLocation(point)
+                            }.getOrElse {
+                                point.copy(
+                                    label = point.coordinateLabel(),
+                                    countryCode = userLocation?.countryCode.orEmpty(),
+                                    administrativeArea = userLocation?.administrativeArea.orEmpty(),
+                                    regionCode = userLocation?.regionCode.orEmpty(),
+                                    currencyCode = userLocation?.currencyCode.orEmpty()
+                                )
+                            }
                             val region = RemoteConnections.communityRegionFor(
-                                userLocation ?: point
+                                selectedLocation
                             )
                             RemoteConnections.createMeetupEvent(
                                 context,
@@ -520,23 +569,16 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
                                     id = "",
                                     title = title,
                                     dateTime = dateTime,
-                                    description = buildString {
-                                        if (dateTime.isNotBlank()) {
-                                            append("Fecha y hora: ")
-                                            append(dateTime)
-                                            append('\n')
-                                        }
-                                        append(description)
-                                    },
+                                    description = description,
                                     latitude = point.latitude,
                                     longitude = point.longitude,
                                     createdBy = account.userId,
                                     createdByUsername = account.username,
                                     region = region,
-                                    location = userLocation?.label.orEmpty(),
+                                    location = selectedLocation.label,
                                     imageUri = imageUri,
-                                    countryCode = userLocation?.countryCode.orEmpty(),
-                                    administrativeArea = userLocation?.administrativeArea.orEmpty()
+                                    countryCode = selectedLocation.countryCode,
+                                    administrativeArea = selectedLocation.administrativeArea
                                 )
                             )
                         }
@@ -544,8 +586,17 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
                         creationStep = MeetupCreationStep.CLOSED
                         selectedPoint = null
                         userLocation?.let(::refresh)
-                    }.onFailure { error = RemoteConnections.userFriendlyError(it) }
-                    isLoading = false
+                    }.onFailure { failure ->
+                        if (failure is RemoteConnections.RemotePartialSuccessException) {
+                            creationStep = MeetupCreationStep.CLOSED
+                            selectedPoint = null
+                            error = RemoteConnections.userFriendlyError(failure)
+                            userLocation?.let(::refresh)
+                        } else {
+                            creationError = RemoteConnections.userFriendlyError(failure)
+                        }
+                    }
+                    creationLoading = false
                 }
             }
         )
@@ -558,8 +609,10 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
             loading = meetupDetailLoading,
             error = meetupDetailError,
             onDismiss = {
+                meetupDetailRequestId += 1
                 meetupDetail = null
                 meetupDetailError = null
+                meetupDetailLoading = false
             },
             onComplete = { completeMeetup(event) },
             onAddPhoto = { imageUri -> addMeetupPhoto(event, imageUri) },
@@ -569,13 +622,14 @@ fun RoutesScreen(account: AccountSession?, onOpenChat: (UserChat) -> Unit = {}) 
 }
 
 @Composable
-private fun OpenStreetMap(
+internal fun OpenStreetMap(
     modifier: Modifier,
     center: GeoPoint,
     userLocation: GeoPoint?,
     meetups: List<MeetupEvent>,
     selectedPoint: GeoPoint?,
     creationStep: MeetupCreationStep,
+    styleDefinition: String = OPEN_FREE_MAP_STYLE,
     onMapReady: (MapLibreMap) -> Unit,
     onPointSelected: (GeoPoint) -> Unit,
     onMeetupSelected: (MeetupEvent) -> Unit,
@@ -688,7 +742,7 @@ private fun OpenStreetMap(
                 .target(currentCenter.value.toLatLng())
                 .zoom(13.0)
                 .build()
-            readyMap.setStyle(OPEN_FREE_MAP_STYLE) { style ->
+            val styleCallback = Style.OnStyleLoaded { style ->
                 if (!destroyed) {
                     style.addImage(USER_ICON_ID, userLocationIcon)
                     style.addImage(MEETUP_ICON_ID, meetupIcon)
@@ -702,6 +756,11 @@ private fun OpenStreetMap(
                     map = readyMap
                     currentOnMapReady.value(readyMap)
                 }
+            }
+            if (styleDefinition.trimStart().startsWith("{")) {
+                readyMap.setStyle(Style.Builder().fromJson(styleDefinition), styleCallback)
+            } else {
+                readyMap.setStyle(styleDefinition, styleCallback)
             }
         }
 
@@ -752,12 +811,19 @@ private fun OpenStreetMap(
 
     AndroidView(
         factory = { mapView },
+        update = { view ->
+            view.contentDescription = when (meetups.size) {
+                0 -> "Mapa. No hay juntas cercanas visibles"
+                1 -> "Mapa. 1 junta cercana visible"
+                else -> "Mapa. ${meetups.size} juntas cercanas visibles"
+            }
+        },
         modifier = modifier
     )
 }
 
 private fun createSelectedPointIcon(context: android.content.Context): Bitmap =
-        Bitmap.createBitmap(
+        createBitmap(
             (36 * context.resources.displayMetrics.density).roundToInt(),
             (36 * context.resources.displayMetrics.density).roundToInt(),
             Bitmap.Config.ARGB_8888
@@ -794,7 +860,7 @@ private fun createTintedMarkerBitmap(context: android.content.Context, tint: Int
         DrawableCompat.setTint(tinted, tint)
         val width = tinted.intrinsicWidth.coerceAtLeast(1)
         val height = tinted.intrinsicHeight.coerceAtLeast(1)
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val bitmap = createBitmap(width, height, Bitmap.Config.ARGB_8888)
         tinted.setBounds(0, 0, width, height)
         tinted.draw(Canvas(bitmap))
         bitmap
@@ -925,9 +991,9 @@ internal fun LocationSearchDialog(
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val scrimInteractionSource = remember { MutableInteractionSource() }
-    val panelInteractionSource = remember { MutableInteractionSource() }
     val recentLocations = remember { LocalDataStore.loadLocationHistory(context) }
-    var input by remember { mutableStateOf(initial) }
+    var input by remember(initial) { mutableStateOf(initial) }
+    var clearInitialTextOnFocus by remember(initial) { mutableStateOf(initial.isNotEmpty()) }
     var hasEditedInput by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
     var closing by remember { mutableStateOf(false) }
@@ -1026,11 +1092,8 @@ internal fun LocationSearchDialog(
                 .padding(16.dp)
                 .widthIn(max = 560.dp)
                 .fillMaxWidth()
-                .clickable(
-                    interactionSource = panelInteractionSource,
-                    indication = null,
-                    onClick = {}
-                ),
+                .testTag(LOCATION_SEARCH_PANEL_TEST_TAG)
+                .pointerInput(Unit) { detectTapGestures(onTap = {}) },
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surface,
             shadowElevation = 14.dp
@@ -1057,6 +1120,15 @@ internal fun LocationSearchDialog(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
+                        .onFocusChanged { focusState ->
+                            if (focusState.isFocused && clearInitialTextOnFocus) {
+                                input = ""
+                                clearInitialTextOnFocus = false
+                                hasEditedInput = false
+                                error = null
+                                results = emptyList()
+                            }
+                        }
                         .appBikeTextFieldGlow(),
                     colors = appBikeTextFieldColors(),
                     label = { Text("Lugar o dirección") },
@@ -1173,7 +1245,7 @@ internal fun LocationSearchDialog(
 }
 
 @Composable
-private fun MeetupDetailDialog(
+internal fun MeetupDetailDialog(
     event: MeetupEvent,
     account: AccountSession?,
     loading: Boolean,
@@ -1231,7 +1303,10 @@ private fun MeetupDetailDialog(
                         }
                     }
                 } else {
-                    MeetupRemoteImage(null)
+                    MeetupRemoteImage(
+                        source = null,
+                        modifier = Modifier.fillMaxWidth().height(190.dp)
+                    )
                 }
                 if (event.dateTime.isNotBlank()) {
                     Text(event.dateTime, fontWeight = FontWeight.SemiBold)
@@ -1266,7 +1341,7 @@ private fun MeetupDetailDialog(
                 } else {
                     Button(
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !loading && account != null,
+                        enabled = !loading,
                         onClick = onContact
                     ) {
                         Text(if (account == null) "Inicia sesión para contactar" else "Contactar al organizador")
@@ -1284,14 +1359,14 @@ private fun MeetupDetailDialog(
 @Composable
 private fun MeetupRemoteImage(
     source: String?,
-    modifier: Modifier = Modifier.fillMaxWidth().height(190.dp)
+    modifier: Modifier = Modifier
 ) {
     var bitmap by remember(source) { mutableStateOf<android.graphics.Bitmap?>(null) }
     LaunchedEffect(source) {
         bitmap = if (source.isNullOrBlank()) {
             null
         } else {
-            runCatching {
+            runSuspendCatching {
                 withContext(Dispatchers.IO) {
                     RemoteImageLoader.loadBitmap(source)
                 }
@@ -1325,6 +1400,8 @@ private fun MeetupRemoteImage(
 
 @Composable
 private fun MeetupFormDialog(
+    isSaving: Boolean,
+    error: String?,
     onDismiss: () -> Unit,
     onCreate: (String, String, String, String) -> Unit
 ) {
@@ -1347,16 +1424,18 @@ private fun MeetupFormDialog(
         }
     }
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!isSaving) onDismiss() },
         title = { Text("Crear junta") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                AppInput("Título", title) { title = it }
-                AppInput("Fecha y hora", dateTime) { dateTime = it }
+                error?.let { ErrorBanner(it) }
+                AppInput("Título", title, enabled = !isSaving) { title = it }
+                AppInput("Fecha y hora", dateTime, enabled = !isSaving) { dateTime = it }
                 OutlinedTextField(
                     value = description,
                     onValueChange = { description = it },
                     label = { Text("Información de la junta") },
+                    enabled = !isSaving,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(140.dp)
@@ -1366,6 +1445,7 @@ private fun MeetupFormDialog(
                 )
                 Button(
                     modifier = Modifier.fillMaxWidth(),
+                    enabled = !isSaving,
                     onClick = {
                         imagePicker.launch(arrayOf("image/jpeg", "image/png", "image/webp"))
                     }
@@ -1377,13 +1457,21 @@ private fun MeetupFormDialog(
                 }
             }
         },
-        dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Volver") } },
+        dismissButton = {
+            OutlinedButton(enabled = !isSaving, onClick = onDismiss) { Text("Volver") }
+        },
         confirmButton = {
             Button(
-                enabled = title.isNotBlank() && dateTime.isNotBlank() &&
+                enabled = !isSaving && title.isNotBlank() && dateTime.isNotBlank() &&
                     description.isNotBlank(),
                 onClick = { onCreate(title, dateTime, description, imageUri) }
-            ) { Text("Publicar") }
+            ) {
+                if (isSaving) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Text("Publicar")
+                }
+            }
         }
     )
 }

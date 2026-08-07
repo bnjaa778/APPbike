@@ -38,6 +38,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 data class MessageNotificationEvent(
+    val recipientUserId: String,
     val chatId: String,
     val messageId: String,
     val chatType: ChatType,
@@ -52,6 +53,11 @@ data class MessageNotificationEvent(
         title = chatTitle
     )
 }
+
+internal fun isNotificationForActiveUser(
+    recipientUserId: String,
+    activeUserId: String?
+): Boolean = recipientUserId.isNotBlank() && recipientUserId == activeUserId
 
 object ChatNotificationEventBus {
     private val mutableEvents = MutableSharedFlow<MessageNotificationEvent>(
@@ -69,6 +75,7 @@ object ChatNotificationCenter {
     const val EXTRA_CHAT_ID = "notification_chat_id"
     const val EXTRA_CHAT_TYPE = "notification_chat_type"
     const val EXTRA_CHAT_TITLE = "notification_chat_title"
+    const val EXTRA_RECIPIENT_USER_ID = "notification_recipient_user_id"
 
     private const val CHANNEL_ID = "appbike_new_messages"
     private const val LISTENER_CHANNEL_ID = "appbike_message_listener"
@@ -138,6 +145,8 @@ object ChatNotificationCenter {
             .build()
 
     internal fun dispatch(context: Context, event: MessageNotificationEvent) {
+        val activeUserId = AccountStore.loadSession(context)?.userId
+        if (!isNotificationForActiveUser(event.recipientUserId, activeUserId)) return
         if (appInForeground) {
             ChatNotificationEventBus.publish(event)
         } else {
@@ -165,6 +174,10 @@ object ChatNotificationCenter {
         WorkManager.getInstance(context).cancelUniqueWork(PERIODIC_WORK_NAME)
     }
 
+    fun clearNotifications(context: Context) {
+        NotificationManagerCompat.from(context).cancelAll()
+    }
+
     fun canPostNotifications(context: Context): Boolean {
         val runtimePermissionGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             ContextCompat.checkSelfPermission(
@@ -178,15 +191,10 @@ object ChatNotificationCenter {
     fun showSystemNotification(context: Context, event: MessageNotificationEvent) {
         if (!canPostNotifications(context)) return
         createChannel(context)
-        val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putExtra(EXTRA_CHAT_ID, event.chatId)
-            putExtra(EXTRA_CHAT_TYPE, event.chatType.name)
-            putExtra(EXTRA_CHAT_TITLE, event.chatTitle)
-        }
+        val intent = messageNotificationIntent(context, event)
         val pendingIntent = PendingIntent.getActivity(
             context,
-            event.chatId.hashCode(),
+            "${event.recipientUserId}:${event.chatId}".hashCode(),
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -202,12 +210,29 @@ object ChatNotificationCenter {
             .build()
         try {
             NotificationManagerCompat.from(context).notify(
-                event.messageId.ifBlank { "${event.chatId}:${event.message}" }.hashCode(),
+                buildString {
+                    append(event.recipientUserId)
+                    append(':')
+                    append(event.chatId)
+                    append(':')
+                    append(event.messageId.ifBlank { event.message })
+                }.hashCode(),
                 notification
             )
         } catch (_: SecurityException) {
             // Android 13+ can revoke POST_NOTIFICATIONS after the pre-check.
         }
+    }
+
+    internal fun messageNotificationIntent(
+        context: Context,
+        event: MessageNotificationEvent
+    ): Intent = Intent(context, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        putExtra(EXTRA_RECIPIENT_USER_ID, event.recipientUserId)
+        putExtra(EXTRA_CHAT_ID, event.chatId)
+        putExtra(EXTRA_CHAT_TYPE, event.chatType.name)
+        putExtra(EXTRA_CHAT_TITLE, event.chatTitle)
     }
 }
 
@@ -219,7 +244,7 @@ class ChatNotificationListenerService : Service() {
         super.onCreate()
         ChatNotificationCenter.createChannel(this)
         val notification = ChatNotificationCenter.listenerNotification(this)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 ChatNotificationCenter.LISTENER_NOTIFICATION_ID,
                 notification,
@@ -240,7 +265,7 @@ class ChatNotificationListenerService : Service() {
                     break
                 }
                 RemoteConnections.setSession(session)
-                runCatching {
+                runSuspendCatching {
                     ChatNotificationRepository.sync(applicationContext, session)
                 }.onSuccess { events ->
                     events.forEach { event ->
@@ -360,6 +385,7 @@ object ChatNotificationRepository {
                     }
                     ?: "Usuario de APPBIKE"
                 MessageNotificationEvent(
+                    recipientUserId = session.userId,
                     chatId = chat.id,
                     messageId = message.id,
                     chatType = chat.type,
@@ -386,7 +412,7 @@ class ChatNotificationWorker(
         if (ChatNotificationCenter.appInForeground) return Result.success()
         val session = AccountStore.loadSession(applicationContext) ?: return Result.success()
         RemoteConnections.setSession(session)
-        return runCatching {
+        return runSuspendCatching {
             ChatNotificationRepository.sync(applicationContext, session).forEach { event ->
                 ChatNotificationCenter.dispatch(applicationContext, event)
             }

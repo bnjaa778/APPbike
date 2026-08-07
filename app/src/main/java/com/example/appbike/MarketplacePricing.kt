@@ -34,9 +34,9 @@ internal fun marketplaceCurrency(code: String): MarketplaceCurrency = when (code
 }
 
 /**
- * Currency is currently a presentation concern because the community backend
- * does not persist a currency field. A full geocoder label is preferred; the
- * coordinate fallback keeps existing Chile/Argentina locations useful.
+ * Currency is resolved from the persisted backend field when available. A full
+ * geocoder label and coordinate fallback keep legacy records without currency
+ * useful in Chile, Argentina and the other supported countries.
  */
 internal fun marketplaceCurrencyFor(point: GeoPoint?): MarketplaceCurrency {
     if (point == null) return CLP

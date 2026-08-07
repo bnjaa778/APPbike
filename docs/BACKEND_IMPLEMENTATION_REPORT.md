@@ -1,6 +1,6 @@
 # APPbike - Implementación pendiente del backend
 
-Fecha del contrato: 2026-07-22.
+Fecha del contrato: 2026-07-22. Estado remoto revalidado: 2026-08-06.
 
 Este documento es el relevo operativo para el equipo que mantiene
 `AppBikeExternal.php`, `AppBikeInternal.php` y `AppBikeCommunity.php`. Android ya
@@ -10,15 +10,30 @@ privadas.
 
 ## 1. Estado comprobado
 
-Prueba real contra `https://api.zizzio.cl/APIS/AppBikeExternal.php`:
+Prueba real contra `https://api.zizzio.cl/APIS/AppBikeExternal.php` del
+2026-08-06, que reemplaza la fotografía de despliegue del 2026-07-22:
 
-- `marketplace.list` con región `LAS` responde HTTP 200 y devolvió dos registros.
-- `junta.list` con región `LAS` responde HTTP 200 y devolvió dos registros.
-- `chat.list`, `location.search` y `sports.connections.list` responden HTTP 400;
-  todavía no están implementados o no están en la allowlist pública.
-- Los listados comunitarios devuelven `photo_folder_path`. Es una ruta interna y
-  debe eliminarse de todas las respuestas públicas.
-- Los listados no devuelven `photo_id`, `currency` ni distancia calculada.
+- `marketplace.list`, `junta.list`, `marketplace.get` y `junta.get` responden
+  HTTP 200 con las colecciones y objetos esperados.
+- `junta.photo.get` responde HTTP 200 con `content_base64`.
+- `location.search` devuelve sugerencias normalizadas con `latitude`,
+  `longitude`, país, área, región y `currency`; `location.resolve` responde
+  HTTP 200. `location.reverse` responde HTTP 400 `unknown_region` incluso para
+  coordenadas válidas de Santiago.
+- `user.bikes.list`, `marketplace.mine.list`, `junta.mine.list`, `chat.list` y
+  `sports.connections.list` sin token responden HTTP 401. Esto confirma que son
+  privadas, pero no permite validar su resultado con una sesión real.
+- El tester publico anuncia `bike.update` y `bike.delete`; Android ya consume
+  ambas acciones con validacion de ID/propietario. El tester no anuncia ninguna
+  accion para crear cuenta ni recuperar/restablecer contrasena.
+- La muestra de Marketplace contiene `latitude`, `longitude`, `country_code`,
+  `administrative_area`, `currency` y la clave `photo_id`, y ya no contiene
+  `photo_folder_path`. Los listados observados no tenían portada poblada; el
+  detalle sí contiene el array `photos`. La muestra de Junta sí tenía `photo_id`
+  y su descarga Base64 fue válida.
+
+Las secciones siguientes siguen siendo el contrato objetivo para todo punto que
+no haya sido validado expresamente en esta comprobación.
 
 Marketplace y Juntas existentes deben seguir funcionando durante la migración.
 Las acciones nuevas se agregan a la allowlist pública, al switch privado, al
@@ -58,6 +73,21 @@ Implementación requerida:
 
 Se puede mantener temporalmente `user_id` en los cuerpos para compatibilidad,
 pero solo como dato que se compara contra el actor autenticado.
+
+### 2.1 Alta y recuperacion de cuenta
+
+Para que un usuario nuevo pueda completar el onboarding sin provision manual,
+el backend debe definir antes que Android lo implemente:
+
+- una accion de registro con correo, nombre de usuario, contrasena y reglas de
+  verificacion;
+- inicio y confirmacion de recuperacion de contrasena con token de un solo uso;
+- limites de frecuencia, expiracion, mensajes neutrales contra enumeracion de
+  cuentas y contrato de errores;
+- incorporacion coordinada al gateway, allowlist/switch privado y tester.
+
+No inventar nombres de acciones ni guardar contrasenas/tokens de recuperacion en
+Android mientras este contrato no exista.
 
 ## 3. Geografía, región y moneda
 
@@ -222,6 +252,9 @@ distance_km, created_at, photo_id
 `photo_id` es solo la portada. No devolver Base64 en el listado y no devolver
 `photo_folder_path`, `file_path` ni otra ruta interna. Con esto Android evita una
 consulta `marketplace.get` por cada tarjeta.
+Android no convierte rutas internas en URL: las descarta. La compatibilidad con
+URL directa se limita a HTTPS bajo dominios Zizzio, por lo que cualquier CDN
+futura debe agregarse explícitamente al contrato y a la política del cliente.
 
 ### 4.3 Contenido propio
 
@@ -239,7 +272,9 @@ Agregar `marketplace.mine.list`:
 
 El usuario real sale del token. Debe consultar todas sus regiones y ambas tablas,
 con filtro opcional de estado. Responde `publications` con el mismo modelo del
-listado. Android mantiene un fallback regional mientras se despliega esta acción.
+listado. Cada elemento debe incluir `user_id` y coincidir con el actor autenticado;
+Android rechaza toda la respuesta si no puede comprobar esa propiedad. Android
+mantiene un fallback regional mientras se despliega esta acción.
 
 ## 5. Juntas
 
@@ -255,7 +290,8 @@ region, location, distance_km, created_at, photo_id
 
 Agregar `junta.mine.list`, autenticada y multirregional, con filtro opcional
 `junta_status=activa|pasada`. Es el origen del historial del creador en el
-perfil. Las juntas pasadas no se mezclan con el mapa público.
+perfil. Cada junta debe incluir el `user_id` del actor autenticado; no devolver
+registros sin propietario. Las juntas pasadas no se mezclan con el mapa público.
 
 `junta.complete`, `junta.status.update`, `junta.update`, `junta.delete` y fotos
 deben validar propiedad. Los movimientos entre tablas deben conservar el mismo

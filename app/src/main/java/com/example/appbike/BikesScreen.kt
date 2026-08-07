@@ -4,11 +4,12 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import android.media.ExifInterface
 import android.net.Uri
-import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.exifinterface.media.ExifInterface
+import androidx.core.graphics.get
+import androidx.core.net.toUri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -28,6 +29,12 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -46,8 +53,33 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-private const val BIKE_PHOTO_LOG_TAG = "APPbikePhotos"
+internal const val BIKE_SUMMARY_CARD_TEST_TAG = "bike_summary_card"
+internal const val BIKE_EDIT_ACTION_TEST_TAG = "bike_edit_action"
+internal const val BIKE_DELETE_ACTION_TEST_TAG = "bike_delete_action"
+internal const val BIKE_SAVE_CHANGES_TEST_TAG = "bike_save_changes"
+internal const val BIKE_CONFIRM_DELETE_TEST_TAG = "bike_confirm_delete"
+internal const val MAINTENANCE_EDIT_TEST_TAG = "maintenance_edit"
+internal const val MAINTENANCE_DELETE_TEST_TAG = "maintenance_delete"
+internal const val SERVICE_EDIT_TEST_TAG = "service_edit"
+internal const val SERVICE_COMPLETE_TEST_TAG = "service_complete"
+internal const val SERVICE_DELETE_TEST_TAG = "service_delete"
+internal const val MAINTENANCE_SAVE_TEST_TAG = "maintenance_save"
+internal const val SERVICE_SAVE_TEST_TAG = "service_save"
+internal const val SERVICE_CONFIRM_COMPLETE_TEST_TAG = "service_confirm_complete"
+
+internal fun isValidApiDateInput(value: String): Boolean {
+    val clean = value.trim()
+    if (!clean.matches(Regex("\\d{4}-\\d{2}-\\d{2}"))) return false
+    return runCatching {
+        SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).apply {
+            isLenient = false
+        }.parse(clean) != null
+    }.getOrDefault(false)
+}
 
 @Composable
 fun BikesScreen(
@@ -58,24 +90,32 @@ fun BikesScreen(
     onOpenAccount: () -> Unit,
     onBack: (() -> Unit)?
 ) {
-    var showForm by remember { mutableStateOf(false) }
-    var selectedBike by remember { mutableStateOf<Bike?>(null) }
-    var isSavingBike by remember { mutableStateOf(false) }
+    var showForm by remember(account?.userId) { mutableStateOf(false) }
+    var selectedBike by remember(account?.userId) { mutableStateOf<Bike?>(null) }
+    var bikeToEdit by remember(account?.userId) { mutableStateOf<Bike?>(null) }
+    var bikePendingDeletion by remember(account?.userId) { mutableStateOf<Bike?>(null) }
+    var isSavingBike by remember(account?.userId) { mutableStateOf(false) }
+    var isUpdatingBike by remember(account?.userId) { mutableStateOf(false) }
+    var isDeletingBike by remember(account?.userId) { mutableStateOf(false) }
+    var bikeFormError by remember(account?.userId) { mutableStateOf<String?>(null) }
+    var deleteBikeError by remember(account?.userId) { mutableStateOf<String?>(null) }
     var isLoadingBikes by remember { mutableStateOf(false) }
     var loadingBikeId by remember { mutableStateOf<Long?>(null) }
     var connectionWarning by remember { mutableStateOf<String?>(null) }
+    var reloadRequest by remember { mutableIntStateOf(0) }
 
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    LaunchedEffect(account?.userId) {
+    LaunchedEffect(account?.userId, reloadRequest) {
         bikes.clear()
         reminders.clear()
         bookings.clear()
+        connectionWarning = null
         if (account == null) return@LaunchedEffect
 
         isLoadingBikes = true
-        runCatching {
+        runSuspendCatching {
             withContext(Dispatchers.IO) {
                 RemoteConnections.loadUserBikes(account.userId)
             }
@@ -89,16 +129,15 @@ fun BikesScreen(
     }
 
     PremiumScreenBackground(PremiumGlowStyle.Bikes) {
-        Scaffold(containerColor = Color.Transparent) { innerPadding ->
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(horizontal = AppDimens.Space4)
-                    .verticalScroll(rememberScrollState()),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(AppDimens.Space4)
-            ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = AppDimens.Space4)
+                .padding(top = AppDimens.Space4)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(AppDimens.Space4)
+        ) {
             if (onBack != null) Row(modifier = Modifier.fillMaxWidth()) {
                 TextButton(onClick = onBack) {
                     Text("← Volver")
@@ -113,7 +152,9 @@ fun BikesScreen(
                 color = AppTextPrimary
             )
 
-            connectionWarning?.let { ErrorBanner(it) }
+            if (connectionWarning != null && bikes.isNotEmpty()) {
+                ErrorBanner(connectionWarning.orEmpty())
+            }
 
             if (account == null) {
                 EmptyState(
@@ -124,12 +165,22 @@ fun BikesScreen(
                 )
             } else if (isLoadingBikes && bikes.isEmpty()) {
                 LoadingState("Cargando bicicletas...")
+            } else if (connectionWarning != null && bikes.isEmpty()) {
+                EmptyState(
+                    title = "No pudimos cargar tus bicicletas",
+                    description = connectionWarning.orEmpty(),
+                    actionLabel = "Reintentar",
+                    onAction = { reloadRequest += 1 }
+                )
             } else if (bikes.isEmpty()) {
                 EmptyState(
                     title = "Aún no tienes bicicletas",
                     description = "Agrega tu primera bicicleta para guardar fotos, mantenciones y servicios.",
                     actionLabel = "Agregar bicicleta",
-                    onAction = { showForm = true }
+                    onAction = {
+                        bikeFormError = null
+                        showForm = true
+                    }
                 )
             } else {
                 bikes.forEach { bike ->
@@ -142,7 +193,7 @@ fun BikesScreen(
                         } else if (loadingBikeId == null) {
                             scope.launch {
                                 loadingBikeId = bikeId
-                                runCatching {
+                                runSuspendCatching {
                                     withContext(Dispatchers.IO) {
                                         RemoteConnections.loadBikeDetails(
                                             activeAccount,
@@ -150,6 +201,7 @@ fun BikesScreen(
                                         )
                                     }
                                 }.onSuccess { loadedBike ->
+                                    connectionWarning = null
                                     val index = bikes.indexOfFirst {
                                         it.remoteId == loadedBike.remoteId
                                     }
@@ -167,20 +219,24 @@ fun BikesScreen(
                     }
                 }
 
-                AddBikeButton { showForm = true }
+                AddBikeButton {
+                    bikeFormError = null
+                    showForm = true
+                }
             }
 
-                Spacer(modifier = Modifier.height(32.dp))
-            }
+            Spacer(modifier = Modifier.height(32.dp))
         }
     }
 
     if (showForm) {
         BikeFormDialog(
             isSaving = isSavingBike,
+            errorMessage = bikeFormError,
             onDismiss = {
                 if (!isSavingBike) {
                     showForm = false
+                    bikeFormError = null
                 }
             },
             onSave = saveBike@ { bike ->
@@ -189,7 +245,7 @@ fun BikesScreen(
                     scope.launch {
                         isSavingBike = true
 
-                        val result = runCatching {
+                        val result = runSuspendCatching {
                             withContext(Dispatchers.IO) {
                                 RemoteConnections.registerBike(context, activeAccount, bike)
                             }
@@ -197,14 +253,57 @@ fun BikesScreen(
 
                         result
                             .onSuccess { savedBike ->
+                                connectionWarning = null
+                                bikeFormError = null
                                 bikes.add(0, savedBike)
                                 showForm = false
                             }
                             .onFailure { error ->
-                                connectionWarning = RemoteConnections.userFriendlyError(error)
+                                bikeFormError = RemoteConnections.userFriendlyError(error)
                             }
 
                         isSavingBike = false
+                    }
+                }
+            }
+        )
+    }
+
+    bikeToEdit?.let { editingBike ->
+        BikeFormDialog(
+            initialBike = editingBike,
+            isSaving = isUpdatingBike,
+            errorMessage = bikeFormError,
+            onDismiss = {
+                if (!isUpdatingBike) {
+                    bikeToEdit = null
+                    bikeFormError = null
+                    selectedBike = editingBike
+                }
+            },
+            onSave = updateBike@ { candidate ->
+                val activeAccount = account ?: return@updateBike
+                if (!isUpdatingBike) {
+                    scope.launch {
+                        isUpdatingBike = true
+                        bikeFormError = null
+                        runSuspendCatching {
+                            withContext(Dispatchers.IO) {
+                                RemoteConnections.updateBike(activeAccount, candidate)
+                            }
+                        }.onSuccess { updatedBike ->
+                            val index = bikes.indexOfFirst {
+                                it.remoteId == updatedBike.remoteId
+                            }
+                            if (index >= 0) bikes[index] = updatedBike
+                            connectionWarning = null
+                            bikeFormError = null
+                            bikeToEdit = null
+                            selectedBike = updatedBike
+                        }.onFailure { error ->
+                            bikeFormError = RemoteConnections.userFriendlyError(error)
+                        }
+                        isUpdatingBike = false
                     }
                 }
             }
@@ -217,11 +316,54 @@ fun BikesScreen(
             bike = bike,
             reminders = reminders,
             bookings = bookings,
-            onDismiss = {
+            isMutatingBike = isDeletingBike,
+            onEdit = {
+                bikeFormError = null
                 selectedBike = null
+                bikeToEdit = bike
             },
-            onError = { message ->
-                connectionWarning = message
+            onDelete = {
+                deleteBikeError = null
+                bikePendingDeletion = bike
+            },
+            onDismiss = {
+                if (!isDeletingBike) selectedBike = null
+            }
+        )
+    }
+
+    bikePendingDeletion?.let { targetBike ->
+        BikeDeleteConfirmationDialog(
+            bike = targetBike,
+            isDeleting = isDeletingBike,
+            errorMessage = deleteBikeError,
+            onDismiss = {
+                bikePendingDeletion = null
+                deleteBikeError = null
+            },
+            onConfirm = {
+                val activeAccount = account
+                if (activeAccount != null) scope.launch {
+                    isDeletingBike = true
+                    deleteBikeError = null
+                    runSuspendCatching {
+                        withContext(Dispatchers.IO) {
+                            RemoteConnections.deleteBike(activeAccount, targetBike)
+                        }
+                    }.onSuccess {
+                        val bikeId = targetBike.remoteId
+                        bikes.removeAll { it.remoteId == bikeId }
+                        reminders.removeAll { it.bikeId == bikeId }
+                        bookings.removeAll { it.bikeId == bikeId }
+                        if (selectedBike?.remoteId == bikeId) selectedBike = null
+                        if (bikeToEdit?.remoteId == bikeId) bikeToEdit = null
+                        bikePendingDeletion = null
+                        connectionWarning = null
+                    }.onFailure { error ->
+                        deleteBikeError = RemoteConnections.userFriendlyError(error)
+                    }
+                    isDeletingBike = false
+                }
             }
         )
     }
@@ -247,15 +389,69 @@ fun BikesScreen(
 }
 
 @Composable
-private fun AddBikeButton(onClick: () -> Unit) {
+internal fun BikeDeleteConfirmationDialog(
+    bike: Bike,
+    isDeleting: Boolean,
+    errorMessage: String?,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = {
+            if (!isDeleting) onDismiss()
+        },
+        title = { Text("¿Eliminar ${bike.name}?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "La bicicleta y sus datos asociados dejarán de estar disponibles. " +
+                            "Esta acción no se puede deshacer."
+                )
+                errorMessage?.let { ErrorBanner(it) }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                enabled = !isDeleting,
+                onClick = onDismiss
+            ) {
+                Text("Cancelar")
+            }
+        },
+        confirmButton = {
+            TextButton(
+                modifier = Modifier.testTag(BIKE_CONFIRM_DELETE_TEST_TAG),
+                enabled = !isDeleting,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                ),
+                onClick = onConfirm
+            ) {
+                Text(if (isDeleting) "Eliminando..." else "Eliminar")
+            }
+        }
+    )
+}
+
+@Composable
+internal fun AddBikeButton(onClick: () -> Unit) {
+    val addBike = onClick
     Column(
+        modifier = Modifier
+            .clickable(onClick = addBike)
+            .clearAndSetSemantics {
+                contentDescription = "Agregar bicicleta"
+                role = Role.Button
+                onClick(label = "Agregar bicicleta") {
+                    addBike()
+                    true
+                }
+            },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Surface(
-            modifier = Modifier
-                .size(64.dp)
-                .clickable(onClick = onClick),
+            modifier = Modifier.size(64.dp),
             shape = CircleShape,
             color = AppPrimary,
             shadowElevation = 4.dp
@@ -279,14 +475,19 @@ private fun AddBikeButton(onClick: () -> Unit) {
 }
 
 @Composable
-private fun BikeSummaryCard(
+internal fun BikeSummaryCard(
     bike: Bike,
-    onClick: () -> Unit
+    onClick: (() -> Unit)? = null
 ) {
+    val cardModifier = Modifier
+        .fillMaxWidth()
+        .testTag(BIKE_SUMMARY_CARD_TEST_TAG)
+        .then(
+            if (onClick != null) Modifier.clickable(onClick = onClick)
+            else Modifier
+        )
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+        modifier = cardModifier,
         shape = RoundedCornerShape(AppDimens.RadiusXLarge),
         colors = CardDefaults.cardColors(
             containerColor = AppSurfaceElevated
@@ -341,6 +542,7 @@ private fun BikeSummaryCard(
             }
         }
     }
+
 }
 
 @Composable
@@ -367,17 +569,24 @@ private fun BikeMetric(
 }
 
 @Composable
-private fun BikeFormDialog(
+internal fun BikeFormDialog(
+    initialBike: Bike? = null,
     isSaving: Boolean,
+    errorMessage: String? = null,
     onDismiss: () -> Unit,
     onSave: (Bike) -> Unit
 ) {
-    var name by remember { mutableStateOf("") }
-    var brand by remember { mutableStateOf("") }
-    var model by remember { mutableStateOf("") }
-    var type by remember { mutableStateOf("") }
-    var serialNumber by remember { mutableStateOf("") }
-    var imageUri by remember { mutableStateOf("") }
+    val isEditing = initialBike != null
+    var name by remember(initialBike?.remoteId) { mutableStateOf(initialBike?.name.orEmpty()) }
+    var brand by remember(initialBike?.remoteId) { mutableStateOf(initialBike?.brand.orEmpty()) }
+    var model by remember(initialBike?.remoteId) { mutableStateOf(initialBike?.model.orEmpty()) }
+    var type by remember(initialBike?.remoteId) { mutableStateOf(initialBike?.type.orEmpty()) }
+    var serialNumber by remember(initialBike?.remoteId) {
+        mutableStateOf(initialBike?.serialNumber.orEmpty())
+    }
+    var imageUri by remember(initialBike?.remoteId) {
+        mutableStateOf(initialBike?.imageUri.orEmpty())
+    }
 
     val context = LocalContext.current
 
@@ -410,10 +619,12 @@ private fun BikeFormDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    "Agregar bicicleta",
+                    if (isEditing) "Editar bicicleta" else "Agregar bicicleta",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold
                 )
+
+                errorMessage?.let { ErrorBanner(it) }
 
                 AppInput("Nombre de la bicicleta", name) {
                     name = it
@@ -436,7 +647,7 @@ private fun BikeFormDialog(
                 }
 
                 Text(
-                    "Fotografía de la bicicleta",
+                    if (isEditing) "Fotografía actual" else "Fotografía de la bicicleta",
                     fontWeight = FontWeight.Bold
                 )
 
@@ -451,22 +662,31 @@ private fun BikeFormDialog(
                     )
                 }
 
-                Button(
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !isSaving,
-                    onClick = {
-                        imagePicker.launch(
-                            arrayOf("image/jpeg", "image/png", "image/webp")
+                if (isEditing) {
+                    Text(
+                        "La fotografía se conserva. La edición actualiza nombre, marca, " +
+                                "modelo, tipo y número de serie.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppTextSecondary
+                    )
+                } else {
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isSaving,
+                        onClick = {
+                            imagePicker.launch(
+                                arrayOf("image/jpeg", "image/png", "image/webp")
+                            )
+                        }
+                    ) {
+                        Text(
+                            if (imageUri.isBlank()) {
+                                "Seleccionar fotografía"
+                            } else {
+                                "Cambiar fotografía"
+                            }
                         )
                     }
-                ) {
-                    Text(
-                        if (imageUri.isBlank()) {
-                            "Seleccionar fotografía"
-                        } else {
-                            "Cambiar fotografía"
-                        }
-                    )
                 }
 
                 Row(
@@ -481,9 +701,18 @@ private fun BikeFormDialog(
                     }
 
                     Button(
+                        modifier = Modifier.testTag(BIKE_SAVE_CHANGES_TEST_TAG),
                         onClick = {
+                            val baseBike = initialBike ?: Bike(
+                                name = name,
+                                brand = brand,
+                                model = model,
+                                type = type,
+                                serialNumber = serialNumber,
+                                imageUri = imageUri
+                            )
                             onSave(
-                                Bike(
+                                baseBike.copy(
                                     name = name,
                                     brand = brand,
                                     model = model,
@@ -499,13 +728,13 @@ private fun BikeFormDialog(
                                 model.isNotBlank() &&
                                 type.isNotBlank() &&
                                 serialNumber.isNotBlank() &&
-                                imageUri.isNotBlank()
+                                (isEditing || imageUri.isNotBlank())
                     ) {
                         Text(
                             if (isSaving) {
                                 "Guardando..."
                             } else {
-                                "Guardar"
+                                if (isEditing) "Guardar cambios" else "Guardar"
                             }
                         )
                     }
@@ -531,7 +760,7 @@ private fun BikeImageFrame(
         } else {
             value = withContext(Dispatchers.IO) {
                 runCatching {
-                    decodeBikeImage(context, Uri.parse(imageUri))
+                    decodeBikeImage(context, imageUri.toUri())
                 }.getOrNull()
             }
         }
@@ -590,7 +819,7 @@ private fun decodeBikeImage(
         val photoId = uri.host.orEmpty()
         if (photoId.isBlank()) return null
         val bytes = RemoteConnections.loadBikePhoto(photoId)
-        return decodeBikeImageBytes(bytes, "api:$photoId")
+        return decodeBikeImageBytes(bytes)
     }
 
     val bounds = BitmapFactory.Options().apply {
@@ -629,27 +858,13 @@ private fun decodeBikeImage(
         oriented
     }
 
-    logBikeImageDiagnostics(
-        source = uri.scheme.orEmpty().ifBlank { "local" },
-        sourceBytes = null,
-        sourceWidth = bounds.outWidth,
-        sourceHeight = bounds.outHeight,
-        sampleSize = sampleSize,
-        decoded = oriented,
-        displayed = displayBitmap,
-        hasTransparency = hasTransparency
-    )
-
     return ProcessedBikeImage(
         bitmap = displayBitmap,
         hasTransparency = hasTransparency
     )
 }
 
-private fun decodeBikeImageBytes(
-    bytes: ByteArray,
-    source: String = "bytes"
-): ProcessedBikeImage? {
+private fun decodeBikeImageBytes(bytes: ByteArray): ProcessedBikeImage? {
     val bounds = BitmapFactory.Options().apply {
         inJustDecodeBounds = true
     }
@@ -678,44 +893,9 @@ private fun decodeBikeImageBytes(
         decoded
     }
 
-    logBikeImageDiagnostics(
-        source = source,
-        sourceBytes = bytes.size,
-        sourceWidth = bounds.outWidth,
-        sourceHeight = bounds.outHeight,
-        sampleSize = sampleSize,
-        decoded = decoded,
-        displayed = displayBitmap,
-        hasTransparency = hasTransparency
-    )
-
     return ProcessedBikeImage(
         bitmap = displayBitmap,
         hasTransparency = hasTransparency
-    )
-}
-
-private fun logBikeImageDiagnostics(
-    source: String,
-    sourceBytes: Int?,
-    sourceWidth: Int,
-    sourceHeight: Int,
-    sampleSize: Int,
-    decoded: Bitmap,
-    displayed: Bitmap,
-    hasTransparency: Boolean
-) {
-    Log.d(
-        BIKE_PHOTO_LOG_TAG,
-        buildString {
-            append("source=").append(source)
-            if (sourceBytes != null) append(" bytes=").append(sourceBytes)
-            append(" source=").append(sourceWidth).append('x').append(sourceHeight)
-            append(" sample=").append(sampleSize)
-            append(" decoded=").append(decoded.width).append('x').append(decoded.height)
-            append(" displayed=").append(displayed.width).append('x').append(displayed.height)
-            append(" transparency=").append(hasTransparency)
-        }
     )
 }
 
@@ -783,7 +963,7 @@ private fun containsTransparentPixels(bitmap: Bitmap): Boolean {
 
     for (y in 0 until bitmap.height step stepY) {
         for (x in 0 until bitmap.width step stepX) {
-            if (android.graphics.Color.alpha(bitmap.getPixel(x, y)) < 250) {
+            if (android.graphics.Color.alpha(bitmap[x, y]) < 250) {
                 return true
             }
         }
@@ -841,13 +1021,15 @@ private fun cropTransparentMargins(bitmap: Bitmap): Bitmap {
 }
 
 @Composable
-private fun BikeDetailDialog(
+internal fun BikeDetailDialog(
     account: AccountSession,
     bike: Bike,
     reminders: MutableList<MaintenanceReminder>,
     bookings: MutableList<ServiceBooking>,
-    onDismiss: () -> Unit,
-    onError: (String) -> Unit
+    isMutatingBike: Boolean,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit
 ) {
     var component by remember { mutableStateOf("") }
     var maintenanceDate by remember { mutableStateOf("") }
@@ -860,6 +1042,24 @@ private fun BikeDetailDialog(
     var isSavingBooking by remember { mutableStateOf(false) }
     var isLoadingMaintenance by remember { mutableStateOf(false) }
     var maintenanceLoaded by remember(bike.remoteId) { mutableStateOf(false) }
+    var dialogError by remember(bike.remoteId) { mutableStateOf<String?>(null) }
+    var reminderToEdit by remember(bike.remoteId) {
+        mutableStateOf<MaintenanceReminder?>(null)
+    }
+    var reminderPendingDeletion by remember(bike.remoteId) {
+        mutableStateOf<MaintenanceReminder?>(null)
+    }
+    var bookingToEdit by remember(bike.remoteId) {
+        mutableStateOf<ServiceBooking?>(null)
+    }
+    var bookingPendingDeletion by remember(bike.remoteId) {
+        mutableStateOf<ServiceBooking?>(null)
+    }
+    var bookingPendingCompletion by remember(bike.remoteId) {
+        mutableStateOf<ServiceBooking?>(null)
+    }
+    var isMutatingMaintenance by remember(bike.remoteId) { mutableStateOf(false) }
+    var maintenanceActionError by remember(bike.remoteId) { mutableStateOf<String?>(null) }
 
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
@@ -869,11 +1069,32 @@ private fun BikeDetailDialog(
     val bikeBookings = bookings.filter {
         it.bikeId == bike.remoteId || (it.bikeId == null && it.bike == bike.name)
     }
+    val maintenanceDateValid = isValidApiDateInput(maintenanceDate)
+    val serviceDateValid = isValidApiDateInput(serviceDate)
+
+    fun <T> runMaintenanceMutation(
+        remoteCall: () -> T,
+        onSuccess: (T) -> Unit
+    ) {
+        if (isMutatingMaintenance) return
+        isMutatingMaintenance = true
+        maintenanceActionError = null
+        scope.launch {
+            runSuspendCatching {
+                withContext(Dispatchers.IO) { remoteCall() }
+            }.onSuccess(onSuccess)
+                .onFailure { error ->
+                    maintenanceActionError = RemoteConnections.userFriendlyError(error)
+                }
+            isMutatingMaintenance = false
+        }
+    }
 
     suspend fun refreshMaintenance() {
         if (bike.remoteId == null || isLoadingMaintenance) return
         isLoadingMaintenance = true
-        runCatching {
+        dialogError = null
+        runSuspendCatching {
             withContext(Dispatchers.IO) {
                 RemoteConnections.loadMaintenance(account, bike)
             }
@@ -884,7 +1105,7 @@ private fun BikeDetailDialog(
             bookings.addAll(data.future)
             maintenanceLoaded = true
         }.onFailure { error ->
-            onError(RemoteConnections.userFriendlyError(error))
+            dialogError = RemoteConnections.userFriendlyError(error)
         }
         isLoadingMaintenance = false
     }
@@ -923,15 +1144,19 @@ private fun BikeDetailDialog(
                     fontWeight = FontWeight.Black
                 )
 
-                TextButton(onClick = onDismiss) {
+                TextButton(
+                    enabled = !isMutatingBike && !isMutatingMaintenance,
+                    onClick = onDismiss
+                ) {
                     Text("Cerrar")
                 }
             }
 
-            BikeSummaryCard(
-                bike = bike,
-                onClick = {}
-            )
+            dialogError?.let { message ->
+                ErrorBanner(message)
+            }
+
+            BikeSummaryCard(bike = bike)
 
             CardItem(
                 title = "Información de la bicicleta",
@@ -939,6 +1164,29 @@ private fun BikeDetailDialog(
                 body = "Serie: ${bike.serialNumber}\n" +
                         "Estado: ${if (bike.isStolen) "Reportada como robada" else "Registrada"}"
             )
+
+            OutlinedButton(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(BIKE_EDIT_ACTION_TEST_TAG),
+                enabled = !isMutatingBike && !isMutatingMaintenance,
+                onClick = onEdit
+            ) {
+                Text("Editar datos de la bicicleta")
+            }
+
+            TextButton(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag(BIKE_DELETE_ACTION_TEST_TAG),
+                enabled = !isMutatingBike && !isMutatingMaintenance,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                ),
+                onClick = onDelete
+            ) {
+                Text("Eliminar bicicleta")
+            }
 
             Text(
                 "Mantenciones pasadas",
@@ -954,11 +1202,18 @@ private fun BikeDetailDialog(
             } else if (bikeReminders.isEmpty()) {
                 Text("No hay mantenciones pasadas registradas.")
             } else {
-                bikeReminders.forEach {
-                    CardItem(
-                        title = it.component,
-                        subtitle = it.date,
-                        body = it.notes.ifBlank { "Sin notas" }
+                bikeReminders.forEach { reminder ->
+                    PastMaintenanceCard(
+                        reminder = reminder,
+                        enabled = !isMutatingMaintenance && reminder.remoteId != null,
+                        onEdit = {
+                            maintenanceActionError = null
+                            reminderToEdit = reminder
+                        },
+                        onDelete = {
+                            maintenanceActionError = null
+                            reminderPendingDeletion = reminder
+                        }
                     )
                 }
             }
@@ -972,7 +1227,16 @@ private fun BikeDetailDialog(
                 component = it
             }
 
-            AppInput("Fecha (AAAA-MM-DD)", maintenanceDate) {
+            AppInput(
+                label = "Fecha (AAAA-MM-DD)",
+                value = maintenanceDate,
+                isError = maintenanceDate.isNotBlank() && !maintenanceDateValid,
+                supportingText = if (maintenanceDate.isNotBlank() && !maintenanceDateValid) {
+                    "Ingresa una fecha real con formato AAAA-MM-DD."
+                } else {
+                    null
+                }
+            ) {
                 maintenanceDate = it
             }
 
@@ -991,32 +1255,40 @@ private fun BikeDetailDialog(
 
                     scope.launch {
                         isSavingReminder = true
+                        dialogError = null
 
-                        val result = runCatching {
+                        val result = runSuspendCatching {
                             withContext(Dispatchers.IO) {
-                                RemoteConnections.createMaintenanceReminder(bike, reminder)
+                                RemoteConnections.createMaintenanceReminder(
+                                    account,
+                                    bike,
+                                    reminder
+                                )
                             }
                         }
 
                         result
                             .onSuccess { savedReminder ->
+                                reminders.removeAll {
+                                    savedReminder.remoteId != null &&
+                                        it.remoteId == savedReminder.remoteId
+                                }
                                 reminders.add(savedReminder)
                                 component = ""
                                 maintenanceDate = ""
                                 maintenanceNotes = ""
                             }
                             .onFailure { error ->
-                                onError(
-                                    RemoteConnections.userFriendlyError(error)
-                                )
+                                dialogError = RemoteConnections.userFriendlyError(error)
                             }
 
                         isSavingReminder = false
                     }
                 },
                 enabled = component.isNotBlank() &&
-                        maintenanceDate.isNotBlank() &&
-                        !isSavingReminder
+                        maintenanceDateValid &&
+                        !isSavingReminder &&
+                        !isMutatingMaintenance
             ) {
                 Text(
                     if (isSavingReminder) {
@@ -1043,7 +1315,16 @@ private fun BikeDetailDialog(
                 service = it
             }
 
-            AppInput("Fecha (AAAA-MM-DD)", serviceDate) {
+            AppInput(
+                label = "Fecha (AAAA-MM-DD)",
+                value = serviceDate,
+                isError = serviceDate.isNotBlank() && !serviceDateValid,
+                supportingText = if (serviceDate.isNotBlank() && !serviceDateValid) {
+                    "Ingresa una fecha real con formato AAAA-MM-DD."
+                } else {
+                    null
+                }
+            ) {
                 serviceDate = it
             }
 
@@ -1063,15 +1344,20 @@ private fun BikeDetailDialog(
 
                     scope.launch {
                         isSavingBooking = true
+                        dialogError = null
 
-                        val result = runCatching {
+                        val result = runSuspendCatching {
                             withContext(Dispatchers.IO) {
-                                RemoteConnections.bookService(bike, booking)
+                                RemoteConnections.bookService(account, bike, booking)
                             }
                         }
 
                         result
                             .onSuccess { savedBooking ->
+                                bookings.removeAll {
+                                    savedBooking.remoteId != null &&
+                                        it.remoteId == savedBooking.remoteId
+                                }
                                 bookings.add(savedBooking)
                                 workshop = ""
                                 service = ""
@@ -1079,9 +1365,7 @@ private fun BikeDetailDialog(
                                 contact = ""
                             }
                             .onFailure { error ->
-                                onError(
-                                    RemoteConnections.userFriendlyError(error)
-                                )
+                                dialogError = RemoteConnections.userFriendlyError(error)
                             }
 
                         isSavingBooking = false
@@ -1089,8 +1373,9 @@ private fun BikeDetailDialog(
                 },
                 enabled = workshop.isNotBlank() &&
                         service.isNotBlank() &&
-                        serviceDate.isNotBlank() &&
-                        !isSavingBooking
+                        serviceDateValid &&
+                        !isSavingBooking &&
+                        !isMutatingMaintenance
             ) {
                 Text(
                     if (isSavingBooking) {
@@ -1101,16 +1386,37 @@ private fun BikeDetailDialog(
                 )
             }
 
-            bikeBookings.forEach {
-                CardItem(
-                    title = it.service,
-                    subtitle = it.workshop,
-                    body = "Fecha: ${it.date}\nContacto: ${it.contact}"
+            Text(
+                "Servicios agendados",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+
+            if (maintenanceLoaded && bikeBookings.isEmpty()) {
+                Text("No hay servicios próximos agendados.")
+            }
+
+            bikeBookings.forEach { booking ->
+                FutureServiceCard(
+                    booking = booking,
+                    enabled = !isMutatingMaintenance && booking.remoteId != null,
+                    onEdit = {
+                        maintenanceActionError = null
+                        bookingToEdit = booking
+                    },
+                    onComplete = {
+                        maintenanceActionError = null
+                        bookingPendingCompletion = booking
+                    },
+                    onDelete = {
+                        maintenanceActionError = null
+                        bookingPendingDeletion = booking
+                    }
                 )
             }
 
             TextButton(
-                enabled = !isLoadingMaintenance,
+                enabled = !isLoadingMaintenance && !isMutatingMaintenance,
                 onClick = {
                     scope.launch {
                         refreshMaintenance()
@@ -1121,6 +1427,469 @@ private fun BikeDetailDialog(
             }
         }
     }
+
+    reminderToEdit?.let { target ->
+        PastMaintenanceEditorDialog(
+            reminder = target,
+            isSaving = isMutatingMaintenance,
+            errorMessage = maintenanceActionError,
+            onDismiss = {
+                if (!isMutatingMaintenance) {
+                    reminderToEdit = null
+                    maintenanceActionError = null
+                }
+            },
+            onSave = { candidate ->
+                runMaintenanceMutation(
+                    remoteCall = {
+                        RemoteConnections.updateMaintenanceReminder(account, bike, candidate)
+                    },
+                    onSuccess = { saved ->
+                        reminders.removeAll { it.remoteId == target.remoteId }
+                        reminders.add(saved)
+                        reminderToEdit = null
+                        maintenanceActionError = null
+                    }
+                )
+            }
+        )
+    }
+
+    reminderPendingDeletion?.let { target ->
+        MaintenanceMutationConfirmationDialog(
+            title = "Eliminar mantención",
+            message = "Se eliminará definitivamente ${target.component} del historial.",
+            confirmLabel = "Eliminar",
+            confirmTag = MAINTENANCE_DELETE_TEST_TAG,
+            isLoading = isMutatingMaintenance,
+            errorMessage = maintenanceActionError,
+            onDismiss = {
+                if (!isMutatingMaintenance) {
+                    reminderPendingDeletion = null
+                    maintenanceActionError = null
+                }
+            },
+            onConfirm = {
+                runMaintenanceMutation(
+                    remoteCall = {
+                        RemoteConnections.deleteMaintenanceReminder(account, bike, target)
+                    },
+                    onSuccess = {
+                        reminders.removeAll { it.remoteId == target.remoteId }
+                        reminderPendingDeletion = null
+                        maintenanceActionError = null
+                    }
+                )
+            }
+        )
+    }
+
+    bookingToEdit?.let { target ->
+        FutureServiceEditorDialog(
+            booking = target,
+            isSaving = isMutatingMaintenance,
+            errorMessage = maintenanceActionError,
+            onDismiss = {
+                if (!isMutatingMaintenance) {
+                    bookingToEdit = null
+                    maintenanceActionError = null
+                }
+            },
+            onSave = { candidate ->
+                runMaintenanceMutation(
+                    remoteCall = {
+                        RemoteConnections.updateServiceBooking(account, bike, candidate)
+                    },
+                    onSuccess = { saved ->
+                        bookings.removeAll { it.remoteId == target.remoteId }
+                        bookings.add(saved)
+                        bookingToEdit = null
+                        maintenanceActionError = null
+                    }
+                )
+            }
+        )
+    }
+
+    bookingPendingCompletion?.let { target ->
+        ServiceCompletionDialog(
+            booking = target,
+            isSaving = isMutatingMaintenance,
+            errorMessage = maintenanceActionError,
+            onDismiss = {
+                if (!isMutatingMaintenance) {
+                    bookingPendingCompletion = null
+                    maintenanceActionError = null
+                }
+            },
+            onConfirm = { completedDate, notes ->
+                runMaintenanceMutation(
+                    remoteCall = {
+                        RemoteConnections.completeServiceBooking(
+                            account,
+                            bike,
+                            target,
+                            completedDate,
+                            notes
+                        )
+                    },
+                    onSuccess = { completed ->
+                        bookings.removeAll { it.remoteId == target.remoteId }
+                        completed.remoteId?.let { completedId ->
+                            reminders.removeAll { it.remoteId == completedId }
+                        }
+                        reminders.add(completed)
+                        bookingPendingCompletion = null
+                        maintenanceActionError = null
+                    }
+                )
+            }
+        )
+    }
+
+    bookingPendingDeletion?.let { target ->
+        MaintenanceMutationConfirmationDialog(
+            title = "Cancelar servicio",
+            message = "Se eliminará el servicio ${target.service} agendado para ${target.date}.",
+            confirmLabel = "Cancelar servicio",
+            confirmTag = SERVICE_DELETE_TEST_TAG,
+            isLoading = isMutatingMaintenance,
+            errorMessage = maintenanceActionError,
+            onDismiss = {
+                if (!isMutatingMaintenance) {
+                    bookingPendingDeletion = null
+                    maintenanceActionError = null
+                }
+            },
+            onConfirm = {
+                runMaintenanceMutation(
+                    remoteCall = {
+                        RemoteConnections.deleteServiceBooking(account, bike, target)
+                    },
+                    onSuccess = {
+                        bookings.removeAll { it.remoteId == target.remoteId }
+                        bookingPendingDeletion = null
+                        maintenanceActionError = null
+                    }
+                )
+            }
+        )
+    }
+}
+
+@Composable
+internal fun PastMaintenanceCard(
+    reminder: MaintenanceReminder,
+    enabled: Boolean,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    AppCard(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            reminder.component,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+        )
+        Text(reminder.date, color = AppPrimaryBright)
+        Text(
+            reminder.notes.ifBlank { "Sin notas" },
+            color = AppTextSecondary
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag(MAINTENANCE_EDIT_TEST_TAG),
+                enabled = enabled,
+                onClick = onEdit
+            ) {
+                Text("Editar")
+            }
+            TextButton(
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag(MAINTENANCE_DELETE_TEST_TAG),
+                enabled = enabled,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                ),
+                onClick = onDelete
+            ) {
+                Text("Eliminar")
+            }
+        }
+    }
+}
+
+@Composable
+internal fun FutureServiceCard(
+    booking: ServiceBooking,
+    enabled: Boolean,
+    onEdit: () -> Unit,
+    onComplete: () -> Unit,
+    onDelete: () -> Unit
+) {
+    AppCard(modifier = Modifier.fillMaxWidth(), highlighted = true) {
+        Text(
+            booking.service,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+        )
+        Text("${booking.workshop} · ${booking.date}", color = AppPrimaryBright)
+        if (booking.contact.isNotBlank()) {
+            Text("Contacto: ${booking.contact}", color = AppTextSecondary)
+        }
+        Spacer(Modifier.height(10.dp))
+        Button(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(SERVICE_COMPLETE_TEST_TAG),
+            enabled = enabled,
+            onClick = onComplete
+        ) {
+            Text("Marcar como realizado")
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag(SERVICE_EDIT_TEST_TAG),
+                enabled = enabled,
+                onClick = onEdit
+            ) {
+                Text("Editar")
+            }
+            TextButton(
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag(SERVICE_DELETE_TEST_TAG),
+                enabled = enabled,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                ),
+                onClick = onDelete
+            ) {
+                Text("Cancelar")
+            }
+        }
+    }
+}
+
+@Composable
+internal fun PastMaintenanceEditorDialog(
+    reminder: MaintenanceReminder,
+    isSaving: Boolean,
+    errorMessage: String?,
+    onDismiss: () -> Unit,
+    onSave: (MaintenanceReminder) -> Unit
+) {
+    var component by remember(reminder.remoteId) { mutableStateOf(reminder.component) }
+    var date by remember(reminder.remoteId) { mutableStateOf(reminder.date) }
+    var notes by remember(reminder.remoteId) { mutableStateOf(reminder.notes) }
+    val dateValid = isValidApiDateInput(date)
+
+    AlertDialog(
+        onDismissRequest = { if (!isSaving) onDismiss() },
+        title = { Text("Editar mantención") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                errorMessage?.let { ErrorBanner(it) }
+                AppInput("Trabajo realizado", component) { component = it }
+                AppInput(
+                    label = "Fecha (AAAA-MM-DD)",
+                    value = date,
+                    isError = date.isNotBlank() && !dateValid,
+                    supportingText = if (date.isNotBlank() && !dateValid) {
+                        "Ingresa una fecha real."
+                    } else {
+                        null
+                    }
+                ) { date = it }
+                AppInput("Notas", notes) { notes = it }
+            }
+        },
+        confirmButton = {
+            Button(
+                modifier = Modifier.testTag(MAINTENANCE_SAVE_TEST_TAG),
+                enabled = component.isNotBlank() && dateValid && !isSaving,
+                onClick = {
+                    onSave(
+                        reminder.copy(
+                            component = component,
+                            date = date,
+                            notes = notes
+                        )
+                    )
+                }
+            ) {
+                Text(if (isSaving) "Guardando..." else "Guardar cambios")
+            }
+        },
+        dismissButton = {
+            TextButton(enabled = !isSaving, onClick = onDismiss) { Text("Cancelar") }
+        }
+    )
+}
+
+@Composable
+internal fun FutureServiceEditorDialog(
+    booking: ServiceBooking,
+    isSaving: Boolean,
+    errorMessage: String?,
+    onDismiss: () -> Unit,
+    onSave: (ServiceBooking) -> Unit
+) {
+    var workshop by remember(booking.remoteId) { mutableStateOf(booking.workshop) }
+    var service by remember(booking.remoteId) { mutableStateOf(booking.service) }
+    var date by remember(booking.remoteId) { mutableStateOf(booking.date) }
+    var contact by remember(booking.remoteId) { mutableStateOf(booking.contact) }
+    val dateValid = isValidApiDateInput(date)
+
+    AlertDialog(
+        onDismissRequest = { if (!isSaving) onDismiss() },
+        title = { Text("Editar servicio") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                errorMessage?.let { ErrorBanner(it) }
+                AppInput("Taller", workshop) { workshop = it }
+                AppInput("Servicio requerido", service) { service = it }
+                AppInput(
+                    label = "Fecha (AAAA-MM-DD)",
+                    value = date,
+                    isError = date.isNotBlank() && !dateValid,
+                    supportingText = if (date.isNotBlank() && !dateValid) {
+                        "Ingresa una fecha real."
+                    } else {
+                        null
+                    }
+                ) { date = it }
+                AppInput("Teléfono o correo", contact) { contact = it }
+            }
+        },
+        confirmButton = {
+            Button(
+                modifier = Modifier.testTag(SERVICE_SAVE_TEST_TAG),
+                enabled = workshop.isNotBlank() && service.isNotBlank() &&
+                    dateValid && !isSaving,
+                onClick = {
+                    onSave(
+                        booking.copy(
+                            workshop = workshop,
+                            service = service,
+                            date = date,
+                            contact = contact
+                        )
+                    )
+                }
+            ) {
+                Text(if (isSaving) "Guardando..." else "Guardar cambios")
+            }
+        },
+        dismissButton = {
+            TextButton(enabled = !isSaving, onClick = onDismiss) { Text("Cancelar") }
+        }
+    )
+}
+
+@Composable
+internal fun ServiceCompletionDialog(
+    booking: ServiceBooking,
+    isSaving: Boolean,
+    errorMessage: String?,
+    onDismiss: () -> Unit,
+    onConfirm: (completedDate: String, notes: String) -> Unit
+) {
+    var completedDate by remember(booking.remoteId) {
+        mutableStateOf(SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date()))
+    }
+    var notes by remember(booking.remoteId) { mutableStateOf("") }
+    val dateValid = isValidApiDateInput(completedDate)
+
+    AlertDialog(
+        onDismissRequest = { if (!isSaving) onDismiss() },
+        title = { Text("Completar servicio") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("${booking.service} · ${booking.workshop}")
+                errorMessage?.let { ErrorBanner(it) }
+                AppInput(
+                    label = "Fecha realizada (AAAA-MM-DD)",
+                    value = completedDate,
+                    isError = completedDate.isNotBlank() && !dateValid,
+                    supportingText = if (completedDate.isNotBlank() && !dateValid) {
+                        "Ingresa una fecha real."
+                    } else {
+                        null
+                    }
+                ) { completedDate = it }
+                AppInput("Notas del trabajo realizado", notes) { notes = it }
+            }
+        },
+        confirmButton = {
+            Button(
+                modifier = Modifier.testTag(SERVICE_CONFIRM_COMPLETE_TEST_TAG),
+                enabled = dateValid && !isSaving,
+                onClick = { onConfirm(completedDate, notes) }
+            ) {
+                Text(if (isSaving) "Completando..." else "Confirmar")
+            }
+        },
+        dismissButton = {
+            TextButton(enabled = !isSaving, onClick = onDismiss) { Text("Volver") }
+        }
+    )
+}
+
+@Composable
+internal fun MaintenanceMutationConfirmationDialog(
+    title: String,
+    message: String,
+    confirmLabel: String,
+    confirmTag: String,
+    isLoading: Boolean,
+    errorMessage: String?,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = { if (!isLoading) onDismiss() },
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(message)
+                Text("Esta acción no se puede deshacer.", color = AppTextSecondary)
+                errorMessage?.let { ErrorBanner(it) }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                modifier = Modifier.testTag(confirmTag),
+                enabled = !isLoading,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                ),
+                onClick = onConfirm
+            ) {
+                Text(if (isLoading) "Procesando..." else confirmLabel)
+            }
+        },
+        dismissButton = {
+            OutlinedButton(enabled = !isLoading, onClick = onDismiss) { Text("Volver") }
+        }
+    )
 }
 
 @Composable
@@ -1148,7 +1917,7 @@ private fun MaintenanceSkeleton() {
                             .background(MaterialTheme.colorScheme.surfaceVariant)
                     )
 
-                    Text("La información aparecerá aquí al conectar la base de datos.")
+                    Text("Cargando información de mantenciones...")
                 }
             }
         }

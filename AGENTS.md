@@ -4,7 +4,7 @@ Este archivo es la entrada principal para trabajar en APPbike. Usalo como
 router: antes de editar, identifica el tipo de tarea, abre primero los archivos
 indicados y conserva los contratos documentados aqui.
 
-Ultima revision del proyecto: 2026-07-22.
+Ultima revision del proyecto: 2026-08-06.
 
 ## Regla de oro
 
@@ -52,6 +52,7 @@ Ultima revision del proyecto: 2026-07-22.
 | Sincronizacion deportiva | `Account.kt` | `SecureTokenStore.kt`, `MainActivity.kt`, `RemoteConnections.kt` |
 | Listado Mis bicicletas | `BikesScreen.kt` | `RemoteConnections.loadUserBikes`, `AppModels.kt` |
 | Crear bicicleta | `BikesScreen.kt` | `RemoteConnections.registerBike`, backend `AppBikeInternal.php` |
+| Editar o eliminar bicicleta | `BikesScreen.kt` | `RemoteConnections.updateBike`, `RemoteConnections.deleteBike` |
 | Detalle de bicicleta | `BikesScreen.kt` | `RemoteConnections.loadBikeDetails` |
 | Fotos de bicicletas | `BikesScreen.kt` | `RemoteConnections.loadBikePhoto`, backend `AppBikeInternal.php` |
 | Mantenciones pasadas | `BikesScreen.kt` | `RemoteConnections.loadMaintenance`, `createMaintenanceReminder` |
@@ -84,13 +85,23 @@ Ultima revision del proyecto: 2026-07-22.
   - `reminders`
   - `bookings`
   - `platforms`
-- `Scaffold` principal es duenio de cabecera y barra inferior.
-- La cabecera muestra marca y boton de perfil.
+- La raiz usa una `Column` determinista con cabecera, contenido central y barra
+  inferior como hermanos directos. No volver a un `Scaffold` raiz sin repetir
+  la auditoria horizontal: su subcomposicion permitia que capas hijas ocultaran
+  visualmente la cabecera al cambiar de destino.
+- Solo el contenido central usa `clipToBounds()`; cabecera y barra inferior
+  conservan su propia prioridad de dibujo.
+- La cabecera muestra marca y boton de perfil, conserva prioridad de dibujo
+  sobre los fondos de las pantallas hijas y debe permanecer visible en los
+  cuatro destinos principales.
 - La barra inferior solo debe contener:
   - `AppScreen.ROUTES` como "Mapas"
   - `AppScreen.BIKES`
   - `AppScreen.MARKETPLACE`
   - `AppScreen.CHAT`
+- En horizontal, la cabecera usa la firma `APPBIKE   RIDE • CONNECT` en una
+  linea y la barra inferior mide 56 dp con iconos de 24 dp sin etiqueta visual.
+  Los cuatro iconos deben conservar su `contentDescription` completo.
 - `ACCOUNT` es flujo secundario accesible desde la cabecera.
 - `HOME`, `SYNC` y `CREATE_PUBLICATION` existen como compatibilidad/alias, pero
   no son destinos principales activos.
@@ -141,7 +152,8 @@ Capa remota centralizada con `HttpURLConnection` y `org.json`.
 3. El boton de perfil abre `AppScreen.ACCOUNT`.
 4. `AccountScreen` contiene perfil, login y tarjetas deportivas.
 5. Si no hay sesion, Bicicletas muestra CTA para ir a Cuenta.
-6. Chat requiere sesion y no muestra conversaciones sin cuenta.
+6. Chat requiere sesion y no muestra conversaciones sin cuenta; su estado vacío
+   ofrece un CTA que abre Cuenta.
 7. Al cerrar sesion se limpian bicicletas, mantenciones y reservas en memoria.
 
 No agregues botones "Volver" a Mapas, Bicicletas, Marketplace o Chat como flujo
@@ -178,6 +190,9 @@ Contrato:
 - Login acepta ID desde `user.id`, `user_id` o `id`.
 - Login acepta correo o nombre de usuario en `usuario` y parsea
   `nombre_de_usuario` desde la raiz o `user`.
+- Login rechaza cualquier identidad devuelta que no sea UUID antes de guardar
+  la sesion. En Cuenta sin sesion, el formulario de acceso aparece antes del
+  panel promocional para que la accion principal quede visible de inmediato.
 - Una cuenta antigua sin nombre pasa por `user.get` y debe completar
   `user.username.update` antes de depender de su identidad visible.
 
@@ -188,17 +203,30 @@ Al cambiar cuenta, verificar:
 - Limpieza en logout.
 - Carga de bicicletas para la cuenta activa.
 - Que ninguna pantalla muestre datos privados de otra cuenta.
+- Los estados de perfil, Chat y notificaciones deben estar asociados al
+  `userId` activo. Una respuesta iniciada por una cuenta anterior debe cancelarse
+  o descartarse al cambiar sesion.
+- Las corrutinas de UI usan `runSuspendCatching` para llamadas suspendibles:
+  convierte errores normales en `Result`, pero nunca intercepta
+  `CancellationException`.
 
 ## Sincronizacion deportiva
 
 - La sincronizacion no es pantalla principal; vive en `AccountScreen`.
 - Plataformas: Strava, Garmin y Wahoo.
-- Los botones ya no simulan conexion local. Usan
-  `sports.connections.list`, `sports.oauth.start`, `sports.oauth.complete` y
-  `sports.connection.delete`.
+- La funcion esta detenida intencionalmente hasta una futura etapa del producto.
+- Las tarjetas son informativas, no tienen botones y muestran una cinta diagonal
+  `PROXIMAMENTE` junto al estado `Vinculacion en pausa`.
+- El bloque deportivo se muestra antes de `ProfileContentSection`/`Tu actividad`
+  para que Strava, Garmin y Wahoo permanezcan juntas y no queden despues de
+  listados propios extensos.
+- Mientras este detenida, `AccountScreen` no llama
+  `sports.connections.list`, `sports.oauth.start`, `sports.oauth.complete` ni
+  `sports.connection.delete`. Las funciones remotas se conservan sin uso en
+  `RemoteConnections.kt` para la reactivacion futura.
 - Callback Android: `appbike://oauth/callback`; `MainActivity` es `singleTask`.
-- El backend todavia no desplego esas acciones. Hasta entonces la UI muestra un
-  error visible y nunca marca una plataforma como conectada.
+- Si llega un callback antiguo mientras la funcion sigue detenida, Android lo
+  consume sin completar OAuth ni marcar una plataforma como conectada.
 - Los secretos y refresh tokens de proveedores pertenecen al backend, no al APK.
 - `SyncScreen.kt` fue eliminado; `AppScreen.SYNC` queda solo como alias hacia
   Cuenta por compatibilidad.
@@ -222,7 +250,9 @@ Campos enviados:
 - `offset`
 
 No reemplazar por `bike.list` sin filtro. Cada cuenta debe ver solo sus
-bicicletas.
+bicicletas. Android valida tambien que cualquier `user_id` no vacio devuelto por
+el listado coincida con la cuenta activa; una respuesta mezclada se rechaza
+completa y nunca se pinta ni se guarda.
 
 ### Detalle
 
@@ -261,6 +291,23 @@ Mientras carga, se muestra "Cargando informacion de la bicicleta...".
 
 No cambiar el nombre multipart `foto`.
 
+### Editar y eliminar bicicleta
+
+- El detalle expone `Editar datos de la bicicleta` y `Eliminar bicicleta`.
+- Editar reutiliza `BikeFormDialog`, conserva foto/IDs y actualiza solamente
+  nombre, marca, modelo, tipo y numero de serie.
+- `RemoteConnections.updateBike` envia `action=bike.update`, `bike_id`,
+  `user_id`, `bike_custom_name`, `bike_brand`, `bike_model`, `bike_type` y
+  `serial_number`.
+- Una respuesta de actualizacion con otro `bike_id` o con propietario ajeno se
+  rechaza; los campos omitidos no eliminan foto ni identidad ya validadas.
+- Eliminar exige una confirmacion destructiva explicita y llama
+  `action=bike.delete` con `bike_id`.
+- La lista, mantenciones y reservas locales se retiran solamente despues de una
+  respuesta remota exitosa. Un fallo permanece visible y permite reintentar.
+- Todo estado de edicion/eliminacion se reinicia por `account.userId`; nunca
+  conservar un dialogo privado al cambiar de cuenta.
+
 ### Fotos de bicicletas
 
 - El backend puede devolver rutas internas como
@@ -270,6 +317,10 @@ No cambiar el nombre multipart `foto`.
 - `BikeImageFrame` detecta ese esquema y llama
   `RemoteConnections.loadBikePhoto(photoId)`.
 - `bike.photo.get` debe responder `photo.content_base64`.
+- Si falta `photo_id`, `safePublicPhotoUrl` solo acepta una ruta relativa publica
+  bajo `api.zizzio.cl` o HTTPS de `zizzio.cl`/subdominios. Debe rechazar rutas
+  internas, traversal, unidades locales, HTTP y hosts ajenos; no relajar esta
+  politica para ocultar un backend incompleto.
 
 Si la app muestra "No fue posible cargar la imagen", comprobar primero que el
 backend desplegado tenga `content_base64` en `bike.photo.get`.
@@ -306,7 +357,11 @@ Estado actual:
 - Usa MapLibre Native OpenGL.
 - Estilo: `https://tiles.openfreemap.org/styles/liberty`.
 - En el primer ingreso solicita permisos de ubicacion Android.
+- La lectura actual usa `LocationManagerCompat.getCurrentLocation` con
+  `CancellationSignal`; no reintroducir `requestSingleUpdate`.
 - La ubicacion obtenida es temporal hasta que el usuario la confirma.
+- Cada confirmacion incrementa su identificador de compromiso. Una respuesta
+  tardia de `location.resolve` no puede reemplazar una ubicacion elegida despues.
 - El usuario puede corregirla mediante busqueda explicita de lugares o
   coordenadas.
 - Ubicacion confirmada se guarda solo en `LocalDataStore` y se reutiliza en los
@@ -317,7 +372,20 @@ Estado actual:
 - Centro inicial si no hay ubicacion: Santiago.
 - Radio fijo: 40 km.
 - Busqueda filtra localmente la lista regional devuelta por el backend.
-- Crear junta requiere sesion.
+- Crear junta requiere sesion. Si no existe, la accion abre Cuenta desde la
+  navegacion raiz; no mostrar una accion sin efecto ni un dialogo informativo.
+- Las recargas y aperturas de detalle usan identificadores de solicitud: una
+  respuesta antigua no puede reemplazar la ubicacion, busqueda o junta vigente.
+- El punto elegido para crear se geocodifica antes de enviar. Si la consulta no
+  responde, conserva la coordenada exacta y hereda solo la metadata regional de
+  la ubicacion confirmada.
+- Crear y subir foto bloquea doble envio. Si la junta se creo pero fallo la foto,
+  la UI cierra el formulario, informa el exito parcial y refresca para evitar una
+  segunda junta duplicada.
+- Mientras el backend no tenga un campo propio de fecha, Android codifica
+  `Fecha y hora: <valor>` una sola vez al inicio de `description`. El parser
+  separa esa metadata del texto visible y las ediciones la reconstruyen; no
+  mostrar ni persistir la fecha duplicada.
 - El selector manual de ubicacion se dibuja como overlay Compose dentro de la
   ventana de la pantalla. No volver a convertirlo en `AlertDialog`: al cerrar
   un dialogo de plataforma con el teclado y MapLibre activos puede quedar una
@@ -331,6 +399,10 @@ Estado actual:
 - El campo es texto Unicode con `hintLocales=es-CL,es`; debe aceptar nombres
   como `Viña del Mar` y mantener disponibles los caracteres del teclado
   espanol. No filtrar ni normalizar el valor visible a ASCII.
+- Si el selector se abre con una ubicacion previa, el primer foco limpia el
+  campo antes de recibir texto. La ubicacion anterior sigue disponible en
+  `Ubicaciones recientes`; no volver a insertar una busqueda nueva dentro de la
+  etiqueta prellenada.
 - El mapa publico consulta y muestra solamente juntas `activa`; no debe mostrar
   selectores de juntas activas/pasadas.
 - Las juntas `pasada` se reservan para el historial futuro del perfil del
@@ -338,9 +410,14 @@ Estado actual:
 - Marcador verde: ubicacion guardada. Marcador azul: junta tocable. Ambos usan
   fuentes GeoJSON y `SymbolLayer`; no reintroducir las APIs deprecadas
   `addMarker`/`MarkerOptions`.
+- El `MapView` anuncia en espanol cuantas juntas cercanas estan visibles. La
+  fuente debe aceptar listas que lleguen despues de cargar el estilo; existe una
+  regresion instrumentada offline para ese orden de eventos.
 - El detalle permite completar y agregar fotos al propietario. Las acciones
   remotas de estado se conservan para la futura administracion desde perfil,
   pero no se exponen como filtro publico del mapa.
+- Contactar al organizador sin sesion abre Cuenta; con sesion conserva el flujo
+  `chat.get_or_create`.
 - Coordenadas de juntas Android se codifican en
   `REGION:<lat>,<lng>|<etiqueta>` dentro de `location`.
 
@@ -358,16 +435,18 @@ Crear envia `region`, `user_id`, `location`, `title`, `description` y
 No guardar ubicacion como perfil de usuario.
 
 La correccion manual muestra sugerencias mientras el usuario escribe. Ese flujo
-usa `android.location.Geocoder`, espera 500 ms y comienza desde 3 caracteres.
+usa `android.location.Geocoder`, espera 450 ms y comienza desde 3 caracteres.
 El dialogo compartido por Mapas y Marketplace se titula "Introduce tu
 ubicación" y su ayuda visible dice "Busca una ciudad, dirección o lugar.".
 Antes de escribir muestra hasta ocho `Ubicaciones recientes`, compartidas entre
 ambos selectores, sin duplicados y ordenadas por uso reciente. Elegir una del
 historial solo cambia la ubicacion activa de la pantalla desde la que se abrio;
 Mapas y Marketplace siguen siendo independientes.
-La capa remota intenta primero `location.search`/`location.reverse`. Mientras el
-backend siga sin esas acciones, el geocodificador Android entrega sugerencias y
-Nominatim queda como respaldo temporal con timeout, cache y limite de frecuencia.
+La capa remota intenta primero `location.search`/`location.reverse`.
+`location.search` ya devuelve sugerencias normalizadas; `location.reverse` aun
+puede responder `unknown_region` para coordenadas validas. El geocodificador
+Android y Nominatim siguen como respaldo temporal con timeout, cache y limite de
+frecuencia.
 No enviar el token APPbike a Nominatim. Retirar el respaldo directo cuando el
 endpoint cacheado de backend este desplegado.
 
@@ -402,9 +481,20 @@ Estado actual:
 - El detalle de una publicacion es un `Dialog` de ancho y alto completos, con
   cabecera de retorno, fotografia protagonista, contenido desplazable y accion
   principal fija al pie. No volver al dialogo compacto centrado.
-- Crear publicacion requiere sesion y ubicacion.
+- Si no existe portada, el detalle usa un placeholder compacto de 180 dp; con
+  fotografia conserva el hero de 340 dp para no empujar el contenido real fuera
+  de la primera ventana.
+- Crear publicacion requiere sesion y ubicacion. Si falta sesion, la accion abre
+  Cuenta desde la navegacion raiz.
 - Creacion primero usa JSON y luego sube la foto multipart con campo `foto`.
+- El formulario bloquea doble envio. Si la publicacion se creo y solo fallo la
+  fotografia, se informa exito parcial y se refresca sin repetir la creacion.
+- Las recargas y detalles descartan respuestas antiguas. Los listados ignoran
+  elementos sin ID y, si una carga vacia falla, ofrecen `Reintentar` en vez de
+  presentar el fallo como un Marketplace realmente vacio.
 - Las tarjetas descargan imagen al renderizar.
+- Contactar al vendedor sin sesion abre Cuenta; el CTA permanece habilitado
+  mientras el detalle no esta cargando.
 - Estados: `activa`, `vendida`, `pausada`, `en_revision`.
 - No mostrar los filtros Activas/Pausadas/Vendidas/En revision en la vista
   publica. Conservar sus contratos y logica para el futuro perfil, donde el
@@ -413,6 +503,12 @@ Estado actual:
   actuales/anteriores, con detalle, edicion, fotos, estado y eliminacion. Intenta
   `marketplace.mine.list`/`junta.mine.list` y usa un fallback regional hasta que
   el backend despliegue los listados multirregionales.
+- Los listados `*.mine.list` deben incluir `user_id` en cada elemento. Android
+  rechaza la respuesta completa si falta el propietario o no coincide con la
+  cuenta activa; no filtrar silenciosamente una violacion de aislamiento.
+- Crear una junta/publicacion valida el propietario devuelto. Si el primer paso
+  ya creo la entidad pero el propietario es inconsistente, se reporta exito
+  parcial y se refresca para evitar un duplicado.
 
 Contrato del formulario de publicacion:
 
@@ -428,7 +524,8 @@ Contrato del formulario de publicacion:
 - En Chile se muestra `$` y `CLP`; en Argentina `$` y `ARS` (peso argentino).
   El helper de moneda contiene equivalencias para otros paises y un fallback
   documentado. Android envia `currency` y la conserva en el modelo. El backend
-  desplegado aun no la devuelve; los registros antiguos usan fallback CLP.
+  observado el 2026-08-06 ya la devuelve; los registros antiguos o respuestas
+  sin ese campo usan el fallback correspondiente a la ubicacion de creacion.
 
 Acciones POST vigentes:
 
@@ -441,6 +538,8 @@ El listado regional actual no incluye fotos. Android ya no ejecuta una consulta
 usa placeholder mientras el backend no lo devuelva. La app convierte la foto en
 `appbike-market-photo://<publication_id>/<photo_id>`.
 `marketplace.photo.get` requiere juntos `publication_id` y `photo_id`.
+Las URLs legacy encontradas dentro de `photos` pasan por
+`safePublicPhotoUrl`; una fuente rechazada no se renderiza y conserva placeholder.
 
 `MarketplacePricing.kt` es la fuente unica para resolver moneda, normalizar la
 entrada entera y formatear miles. No volver a convertir texto localizado con
@@ -459,6 +558,7 @@ Archivos:
 Estado actual:
 
 - Requiere sesion.
+- Sin sesion muestra `Iniciar sesión` y navega a Cuenta desde ese CTA.
 - Tabs:
   - `SOCIAL`
   - `MARKETPLACE`
@@ -474,7 +574,20 @@ Estado actual:
   rechaza expresamente una cadena vacia como cursor invalido.
 - El parser acepta `type`/`chat_type`, participantes como strings u objetos,
   `last_message` como texto u objeto y metadata de pagina en `ChatMessagePage`.
-- Al enviar, guarda mensajes y metadata local.
+- Al enviar, guarda mensajes y metadata local. Lectura y escritura de caches de
+  Chat se realizan en `Dispatchers.IO`, no en el hilo de Compose.
+- La recarga del listado usa un mutex por usuario. Cada conversacion usa su
+  propio mutex para serializar sincronizacion, polling, recarga manual y envio;
+  cambiar de chat cancela el efecto visual anterior sin bloquear otro chat.
+- Para mensajes con el mismo `createdAt`, dos IDs enteros se comparan de forma
+  numerica; IDs no numericos conservan orden lexicografico estable.
+- El borrador se conserva mientras envia y solo se limpia al confirmar el
+  servidor; un fallo de red no borra lo escrito. La sincronizacion usa un
+  `Mutex` para impedir dos descargas simultaneas.
+- Chats y mensajes remotos con ID vacio se rechazan antes de entrar a Compose o
+  a la cache. Un mensaje antiguo sin `chatId` adopta el ID solicitado, pero un
+  `chatId` distinto se rechaza. Al combinar, la version remota mas reciente
+  reemplaza campos antiguos del mismo mensaje local.
 - Participantes parsean `nombre_de_usuario` y mensajes parsean
   `sender_nombre_de_usuario`.
 - `ChatNotificationListenerService` es un Foreground Service `remoteMessaging`:
@@ -483,6 +596,11 @@ Estado actual:
   Android si queda en segundo plano.
 - El listener se inicia con sesion y se detiene en logout. Debe conservar su
   notificacion persistente de baja importancia.
+- Cada `MessageNotificationEvent` lleva `recipientUserId`; el centro y Compose
+  lo comparan con la sesion actual. Logout limpia las notificaciones existentes.
+- El Intent/PendingIntent de una notificacion tambien incluye
+  `EXTRA_RECIPIENT_USER_ID`; `MainActivity` no abre destinos sin destinatario ni
+  de otra cuenta. La identidad del PendingIntent combina usuario y chat.
 - WorkManager revisa cada 15 minutos si el proceso fue cerrado. Notificacion push
   inmediata con proceso muerto queda pendiente de FCM/backend.
 
@@ -513,6 +631,10 @@ Guarda en SharedPreferences:
 - `chat_sync:{userId}:{chatId}`
 - `chat_notification_sync:{userId}:{chatId}`
 
+Al leer cache, se descartan chats sin ID y mensajes vacios o pertenecientes a
+otra conversacion. Los XML de backup excluyen identidad, token cifrado,
+ubicaciones y caches de Chat tanto de nube como de transferencia de dispositivo.
+
 No usarlo para datos remotos globales ni para secretos.
 
 ## Tema visual
@@ -527,10 +649,42 @@ Archivos:
 Reglas:
 
 - Mantener verde como acento principal.
-- Superficies claras calidas y alto contraste.
+- Mantener la identidad grafito/verde electrico, superficies oscuras y alto
+  contraste; los campos usan contorno LED verde-azul con realce al enfocar.
+- Los placeholders de campos de búsqueda usan `AppTextSecondary`; no degradar
+  su contraste al tono `AppTextMuted` sobre `AppSurfaceElevated`.
+- `ui/theme/Color.kt` es la fuente unica de color Compose. No reintroducir los
+  recursos morado/teal de la plantilla eliminada.
 - La app llama `APPbikeTheme(dynamicColor = false)`.
 - Cabecera usa `statusBarsPadding()` por edge-to-edge.
 - Iconos de navegacion vienen de `material-icons-extended`.
+- Con `fontScale >= 1.6`, la cabecera usa `RIDE • CONNECT`, la barra inferior
+  presenta `Bicis` y `Tienda` manteniendo las descripciones semanticas completas.
+- A escala grande, las tarjetas deportivas usan reflow vertical y reservan
+  espacio para la cinta diagonal. La cinta mantiene tamaño visual estable; el
+  estado semantico escalable sigue siendo `Vinculacion en pausa`.
+- Los estados vacios con accion colocan el CTA antes de la descripcion a escala
+  grande. Si el contenido puede superar la ventana, el contenedor debe ser
+  desplazable.
+- `PremiumScreenBackground` recorta solo sus circulos decorativos mediante
+  `clipRect`; no aplicar `clipToBounds()` a todo el contenedor porque introduce
+  una capa grafica que puede alterar el orden visual. El recorte estructural
+  pertenece al contenido central de `MainActivity.kt`.
+- `BikesScreen` no debe anidar otro `Scaffold`; la raiz ya resuelve las barras e
+  insets persistentes.
+- No mostrar controles con apariencia de pestaña si no existe una acción. Cuenta
+  no incluye los antiguos rótulos estáticos Progreso/Entrenamientos/Actividades.
+- La marca APPBIKE se expone como un único encabezado semántico; las tarjetas
+  Strava/Garmin/Wahoo se exponen como un único anuncio por plataforma y
+  `Agregar bicicleta` conserva rol y etiqueta de botón.
+- En `MapScreen`, las capas Compose de buscador/ubicación y acción principal se
+  componen antes de `AndroidView` y usan `zIndex(1f)`. Conservar ese orden para
+  que buscador, ubicación y crear junta sigan disponibles por teclado.
+
+- Una tarjeta resumida solo expone accion de clic cuando recibe un callback. La
+  copia mostrada dentro del detalle de bicicleta es estatica.
+- El panel del selector de ubicacion consume toques para proteger el scrim, pero
+  no anuncia una accion vacia a accesibilidad.
 
 ## Build, dependencias y permisos
 
@@ -543,21 +697,28 @@ Archivos:
 
 Configuracion actual:
 
-- AGP 8.13.2.
-- Kotlin 2.0.21.
-- Compose BOM 2024.09.00.
-- compileSdk 36.
-- targetSdk 36.
+- AGP 9.3.1 y Gradle 9.6.1.
+- Kotlin integrado de AGP; no volver a aplicar `org.jetbrains.kotlin.android`.
+- Plugin Compose Compiler 2.4.10 y Compose BOM 2026.06.01.
+- compileSdk 37.
+- targetSdk 37.
 - minSdk 24.
 - Java/Kotlin target 11.
-- MapLibre: `org.maplibre.gl:android-sdk-opengl:13.0.2`.
+- AndroidX Core 1.19.0 y Lifecycle 2.11.0.
+- MapLibre: `org.maplibre.gl:android-sdk-opengl:13.4.1`.
+- AndroidX ExifInterface: `1.4.2` para orientar fotos locales sin depender de la
+  implementacion de plataforma.
 - WorkManager: `androidx.work:work-runtime-ktx:2.11.2`.
+- Dependencias directas pertenecen al catalogo `gradle/libs.versions.toml`; no
+  volver a declarar coordenadas/versiones literales en `app/build.gradle.kts`.
 - Permisos Android actuales: `INTERNET`, `ACCESS_COARSE_LOCATION` y
   `ACCESS_FINE_LOCATION`, `FOREGROUND_SERVICE`,
   `FOREGROUND_SERVICE_REMOTE_MESSAGING` y `POST_NOTIFICATIONS` en Android 13+.
 
 No reemplazar MapLibre OpenGL por el artefacto Vulkan sin probar en dispositivo
 y emulador.
+No bajar API/AGP/Kotlin/Compose por separado: el toolchain actual se migro como
+un conjunto y usa Kotlin integrado de AGP 9.
 
 `local.properties` actual esperado:
 
@@ -589,23 +750,40 @@ del servidor esta en `docs/BACKEND_IMPLEMENTATION_REPORT.md`.
 
 ## Riesgos conocidos
 
-- Marketplace, Juntas y las cuatro acciones POST de Chat ya responden en el
-  backend desplegado. `location.*`, `*.mine.list` y OAuth deportivo siguen
-  pendientes de backend.
+- Verificacion directa de 2026-08-06: los listados y detalles publicos de
+  Marketplace/Juntas responden; `junta.photo.get` entrega Base64;
+  `location.search` devuelve resultados normalizados y `location.resolve`
+  responde HTTP 200. `location.reverse` aun responde HTTP 400 `unknown_region`
+  para coordenadas validas de Santiago, por lo que el respaldo sigue activo.
+- Las lecturas privadas sin token (`*.mine.list` y Chat) responden HTTP 401, como
+  corresponde. Su funcionamiento autenticado debe probarse nuevamente con una
+  cuenta de prueba; un emulador limpio no permite concluir que esten completos.
+- La sincronizacion deportiva esta detenida por decision de producto. La
+  disponibilidad de OAuth del backend se vuelve a evaluar solo al reactivarla.
 - El backend comunitario guarda `location` como texto. Android codifica
   coordenadas dentro de ese campo y filtra 40 km localmente hasta que existan
   columnas y consultas geograficas reales.
-- Los listados desplegados todavia exponen `photo_folder_path`; Android lo
-  ignora, pero el backend debe dejar de devolver rutas internas.
-- El listado Marketplace no devuelve portada, por lo que las tarjetas muestran
-  placeholder hasta recibir `photo_id`; no reintroducir consultas N+1.
+- La muestra de Marketplace de 2026-08-06 ya incluyo `latitude`, `longitude`,
+  `country_code`, `administrative_area`, `currency` y la clave `photo_id`, sin
+  `photo_folder_path`. El registro probado no tenia un `photo_id` util, por lo
+  que las tarjetas aun pueden mostrar placeholder; no reintroducir consultas N+1.
+- La validacion visual real del 2026-08-06 mostro publicaciones activas de Puerto
+  Montt y una junta activa de Osorno con marcador azul, detalle y foto Base64.
+- Las acciones publicas no deben heredar un Bearer vencido. La politica central
+  de `RemoteConnections` omite autorizacion en login, descubrimiento, detalles,
+  fotos y resolucion publica; mutaciones, bicicletas, perfil, Chat y deportes
+  siguen autenticados.
 - `RemoteConnections.kt` y `BikesScreen.kt` siguen siendo archivos grandes;
   extraer por dominio solo con pruebas que preserven los contratos actuales.
-- Hay tests unitarios reales para ubicaciones, moneda/precio, UUID y merge
+- Hay tests unitarios reales para ubicaciones, moneda/precio, UUID, propiedad de
+  bicicletas, fechas, IDs remotos, autorizacion, codificacion de fuentes y merge
   incremental de Chat; tambien tests instrumentados para parsers JSON y entrada
   Unicode del selector de ubicacion. Los placeholders generados se conservan.
 - Si el backend no devuelve `content_base64` para fotos, las imagenes remotas no
   se muestran.
+- Android limita fotos subidas y descargadas a 20 MB, decodifica con muestreo y
+  aplica EXIF a imagenes locales para evitar picos de memoria y orientacion
+  incorrecta. El backend puede imponer un limite menor.
 - Sin FCM, `force-stop`, reinicio sin abrir la app o detener manualmente el
   listener dejan la recepción sujeta a la siguiente apertura/ventana permitida;
   no prometer push garantizado en esos casos.
@@ -625,9 +803,11 @@ del servidor esta en `docs/BACKEND_IMPLEMENTATION_REPORT.md`.
 4. Abrir Mis bicicletas.
 5. Confirmar que solo aparecen bicicletas de la cuenta.
 6. Abrir una bicicleta y comprobar campos.
-7. Confirmar que la foto se muestra.
-8. Bajar hasta mantenciones y comprobar carga independiente.
-9. Revisar Logcat por `FATAL EXCEPTION`.
+7. Editar una bicicleta descartable y confirmar que conserva foto y propietario.
+8. Abrir eliminar, comprobar la advertencia y cancelar salvo que el dato sea de prueba.
+9. Confirmar que la foto se muestra.
+10. Bajar hasta mantenciones y comprobar carga independiente.
+11. Revisar Logcat por `FATAL EXCEPTION`.
 
 ### Si se cambia mapa, marketplace o chat
 

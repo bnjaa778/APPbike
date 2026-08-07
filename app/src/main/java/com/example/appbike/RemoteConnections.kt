@@ -6,13 +6,17 @@ import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedOutputStream
+import java.io.InputStream
+import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.UnknownHostException
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.UUID
+import androidx.core.net.toUri
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -24,9 +28,22 @@ object RemoteConnections {
     private const val PUBLIC_BASE_URL = "https://api.zizzio.cl/"
     private const val OPEN_STREET_MAP_GEOCODER = "https://nominatim.openstreetmap.org"
     private const val GEOCODER_USER_AGENT = "APPbike-Android/1.0 (https://zizzio.cl)"
+    private val PUBLIC_ACTIONS = setOf(
+        "login",
+        "junta.list",
+        "junta.get",
+        "junta.photo.get",
+        "location.search",
+        "location.reverse",
+        "location.resolve",
+        "marketplace.list",
+        "marketplace.get",
+        "marketplace.photo.get"
+    )
     private const val GEOCODER_MIN_INTERVAL_MS = 1_000L
     private const val GEOCODER_CACHE_LIMIT = 30
     private const val DEFAULT_COMMUNITY_REGION = "LAS"
+    private const val MAX_IMAGE_BYTES = 20L * 1024L * 1024L
     private val geocoderRequestLock = Any()
     private val geocoderCache = linkedMapOf<String, List<GeoPoint>>()
     private var lastGeocoderRequestAt = 0L
@@ -47,6 +64,9 @@ object RemoteConnections {
         val userId = user?.firstString("id")
             ?: response.firstString("user_id", "id")
             ?: throw RemoteConnectionException("El servidor no devolvió el ID de usuario.")
+        if (!isValidAccountUserId(userId)) {
+            throw RemoteConnectionException("El servidor devolvió una identidad de usuario inválida.")
+        }
         val userEmail = user?.optString("email")
             ?.takeIf { it.isNotBlank() }
             ?: response.optString("email", email.trim())
@@ -84,7 +104,7 @@ object RemoteConnections {
             ?: response.firstString("user_id", "id")
             ?: fallback.userId
         if (returnedId != fallback.userId) {
-            throw RemoteConnectionException("El servidor devolviÃ³ un perfil distinto.")
+            throw RemoteConnectionException("El servidor devolvió un perfil distinto.")
         }
         return fallback.copy(
             email = user?.firstString("email")
@@ -104,11 +124,14 @@ object RemoteConnections {
                 .put("limit", 500)
                 .put("offset", 0)
         )
-        return response.optJSONArray("bikes").mapObjects(::bikeFromJson)
+        return validateBikeOwnership(
+            userId = userId,
+            bikes = response.optJSONArray("bikes").mapObjects(::bikeFromJson)
+        )
     }
 
     fun loadBikeDetails(account: AccountSession, bike: Bike): Bike {
-        val bikeId = requireBikeId(bike)
+        val bikeId = requireOwnedBikeId(account, bike)
         val response = postJson(
             JSONObject()
                 .put("action", "bike.get")
@@ -149,41 +172,154 @@ object RemoteConnections {
         account: AccountSession,
         bike: Bike
     ): Bike {
+        val normalizedBike = normalizeBikeMutation(account, bike, requireRemoteId = false)
         val fields = linkedMapOf(
             "action" to "bike.create",
             "user_id" to account.userId,
-            "bike_custom_name" to bike.name.trim(),
-            "bike_brand" to bike.brand.trim(),
-            "bike_model" to bike.model.trim(),
-            "bike_type" to bike.type.trim(),
-            "serial_number" to bike.serialNumber.trim()
+            "bike_custom_name" to normalizedBike.name,
+            "bike_brand" to normalizedBike.brand,
+            "bike_model" to normalizedBike.model,
+            "bike_type" to normalizedBike.type,
+            "serial_number" to normalizedBike.serialNumber
         )
 
-        val response = if (bike.imageUri.isBlank()) {
+        val response = if (normalizedBike.imageUri.isBlank()) {
             postJson(
                 JSONObject().apply {
                     fields.forEach { (key, value) -> put(key, value) }
                 }
             )
         } else {
-            postMultipart(context, fields, Uri.parse(bike.imageUri))
+            postMultipart(context, fields, normalizedBike.imageUri.toUri())
         }
 
         val created = response.optJSONObject("bike")
             ?: throw RemoteConnectionException("El servidor no devolvió la bicicleta creada.")
         val photo = response.optJSONObject("photo")
 
-        return bikeFromJson(created).copy(
-            imageUri = bike.imageUri,
-            photoId = photo?.optString("photo_id").orEmpty()
+        val parsedBike = bikeFromJson(created)
+        val createdPhotoId = photo?.optString("photo_id")
+            ?.takeIf { it.isNotBlank() && it != "null" }
+            ?: parsedBike.photoId
+        val savedBike = parsedBike.copy(
+            userId = parsedBike.userId.ifBlank { account.userId },
+            imageUri = if (createdPhotoId.isNotBlank()) {
+                "appbike-photo://$createdPhotoId"
+            } else {
+                normalizedBike.imageUri
+            },
+            photoId = createdPhotoId
         )
+        return validateBikeOwnership(account.userId, listOf(savedBike)).single()
+    }
+
+    fun updateBike(account: AccountSession, bike: Bike): Bike {
+        val normalizedBike = normalizeBikeMutation(account, bike, requireRemoteId = true)
+        val bikeId = requireOwnedBikeId(account, normalizedBike)
+        val response = postJson(
+            JSONObject()
+                .put("action", "bike.update")
+                .put("bike_id", bikeId)
+                .put("user_id", account.userId)
+                .put("bike_custom_name", normalizedBike.name)
+                .put("bike_brand", normalizedBike.brand)
+                .put("bike_model", normalizedBike.model)
+                .put("bike_type", normalizedBike.type)
+                .put("serial_number", normalizedBike.serialNumber)
+        )
+        val returnedBike = response.optJSONObject("bike")?.let(::bikeFromJson)
+        return mergeUpdatedBike(account, normalizedBike, returnedBike)
+    }
+
+    fun deleteBike(account: AccountSession, bike: Bike) {
+        val bikeId = requireOwnedBikeId(account, bike)
+        postJson(
+            JSONObject()
+                .put("action", "bike.delete")
+                .put("bike_id", bikeId)
+        )
+    }
+
+    internal fun normalizeBikeMutation(
+        account: AccountSession,
+        bike: Bike,
+        requireRemoteId: Boolean
+    ): Bike {
+        if (bike.userId.isNotBlank() && bike.userId != account.userId) {
+            throw RemoteConnectionException("Esta bicicleta no pertenece a la cuenta activa.")
+        }
+        if (requireRemoteId) requireOwnedBikeId(account, bike)
+
+        val normalized = bike.copy(
+            name = bike.name.trim(),
+            brand = bike.brand.trim(),
+            model = bike.model.trim(),
+            type = bike.type.trim(),
+            serialNumber = bike.serialNumber.trim(),
+            userId = account.userId
+        )
+        if (
+            normalized.name.isBlank() ||
+            normalized.brand.isBlank() ||
+            normalized.model.isBlank() ||
+            normalized.type.isBlank() ||
+            normalized.serialNumber.isBlank()
+        ) {
+            throw RemoteConnectionException("Completa todos los datos obligatorios de la bicicleta.")
+        }
+        return normalized
+    }
+
+    internal fun mergeUpdatedBike(
+        account: AccountSession,
+        requested: Bike,
+        returned: Bike?
+    ): Bike {
+        val requestedId = requireOwnedBikeId(account, requested)
+        val candidate = returned ?: requested
+        val merged = candidate.copy(
+            name = candidate.name.ifBlank { requested.name },
+            brand = candidate.brand.ifBlank { requested.brand },
+            model = candidate.model.ifBlank { requested.model },
+            type = candidate.type.ifBlank { requested.type },
+            serialNumber = candidate.serialNumber.ifBlank { requested.serialNumber },
+            remoteId = candidate.remoteId ?: requestedId,
+            userId = candidate.userId.ifBlank { account.userId },
+            photoId = candidate.photoId.ifBlank { requested.photoId },
+            distanceKm = candidate.distanceKm.ifBlank { requested.distanceKm },
+            lastMaintenance = candidate.lastMaintenance.ifBlank { requested.lastMaintenance },
+            nextMaintenance = candidate.nextMaintenance.ifBlank { requested.nextMaintenance },
+            imageUri = candidate.imageUri.ifBlank { requested.imageUri }
+        )
+        if (merged.remoteId != requestedId) {
+            throw RemoteConnectionException(
+                "El servidor devolvió una bicicleta distinta a la actualizada."
+            )
+        }
+        return validateBikeOwnership(account.userId, listOf(merged)).single()
+    }
+
+    internal fun requireOwnedBikeId(account: AccountSession, bike: Bike): Long {
+        if (bike.userId.isNotBlank() && bike.userId != account.userId) {
+            throw RemoteConnectionException("Esta bicicleta no pertenece a la cuenta activa.")
+        }
+        return requireBikeId(bike)
+    }
+
+    internal fun validateBikeOwnership(userId: String, bikes: List<Bike>): List<Bike> {
+        if (bikes.any { it.userId.isNotBlank() && it.userId != userId }) {
+            throw RemoteConnectionException(
+                "El servidor devolvió bicicletas que no pertenecen a la cuenta activa."
+            )
+        }
+        return bikes
     }
 
     fun loadMaintenance(
         account: AccountSession,
         bike: Bike
     ): BikeMaintenanceData {
-        val bikeId = requireBikeId(bike)
+        val bikeId = requireOwnedBikeId(account, bike)
 
         val pastResponse = postJson(
             JSONObject()
@@ -204,28 +340,10 @@ object RemoteConnections {
 
         return BikeMaintenanceData(
             past = pastResponse.optJSONArray("maintenance").mapObjects { item ->
-                MaintenanceReminder(
-                    bike = bike.name,
-                    component = item.optString("maintenance_type"),
-                    date = item.optString("maintenance_date"),
-                    notes = item.optString("description"),
-                    remoteId = item.firstLong("id"),
-                    bikeId = bikeId
-                )
+                pastMaintenanceFromJson(item, bike, bikeId)
             },
             future = futureResponse.optJSONArray("maintenance").mapObjects { item ->
-                val description = item.optString("description")
-                val workshop = description.lineValue("Taller:")
-                val contact = description.lineValue("Contacto:")
-                ServiceBooking(
-                    workshop = workshop,
-                    service = item.optString("maintenance_type"),
-                    date = item.optString("scheduled_date"),
-                    contact = contact.ifBlank { description },
-                    bike = bike.name,
-                    remoteId = item.firstLong("id"),
-                    bikeId = bikeId
-                )
+                futureMaintenanceFromJson(item, bike, bikeId)
             }
         )
     }
@@ -248,64 +366,305 @@ object RemoteConnections {
                 "El servidor no devolvió el contenido de la fotografía."
             )
 
-        return runCatching {
-            Base64.decode(encodedContent, Base64.DEFAULT)
-        }.getOrElse {
-            throw RemoteConnectionException(
-                "El contenido de la fotografía no es válido.",
-                it
-            )
-        }
+        return decodePhotoContent(encodedContent)
     }
 
     fun createMaintenanceReminder(
+        account: AccountSession,
         bike: Bike,
         reminder: MaintenanceReminder
     ): MaintenanceReminder {
-        val bikeId = requireBikeId(bike)
+        val normalized = normalizeMaintenanceReminder(account, bike, reminder, false)
+        val bikeId = normalized.bikeId!!
         val response = postJson(
             JSONObject()
                 .put("action", "maintenance.past.create")
                 .put("bike_id", bikeId)
-                .put("maintenance_date", requireApiDate(reminder.date))
-                .put("maintenance_type", reminder.component.trim())
-                .put("description", reminder.notes.trim())
+                .put("maintenance_date", normalized.date)
+                .put("maintenance_type", normalized.component)
+                .put("description", normalized.notes)
         )
         val saved = response.optJSONObject("maintenance")
             ?: throw RemoteConnectionException("El servidor no devolvió la mantención creada.")
 
-        return reminder.copy(
-            date = saved.optString("maintenance_date", reminder.date),
-            remoteId = saved.firstLong("id"),
-            bikeId = bikeId
+        return mergeMaintenanceReminder(normalized, saved, bike, bikeId)
+    }
+
+    fun updateMaintenanceReminder(
+        account: AccountSession,
+        bike: Bike,
+        reminder: MaintenanceReminder
+    ): MaintenanceReminder {
+        val normalized = normalizeMaintenanceReminder(account, bike, reminder, true)
+        val bikeId = normalized.bikeId!!
+        val response = postJson(
+            JSONObject()
+                .put("action", "maintenance.past.update")
+                .put("past_id", normalized.remoteId)
+                .put("bike_id", bikeId)
+                .put("maintenance_date", normalized.date)
+                .put("maintenance_type", normalized.component)
+                .put("description", normalized.notes)
+        )
+        val saved = response.firstObject("maintenance", "past_maintenance", "item")
+            ?: return normalized
+        return mergeMaintenanceReminder(normalized, saved, bike, bikeId)
+    }
+
+    fun deleteMaintenanceReminder(
+        account: AccountSession,
+        bike: Bike,
+        reminder: MaintenanceReminder
+    ) {
+        val normalized = normalizeMaintenanceReminder(account, bike, reminder, true)
+        postJson(
+            JSONObject()
+                .put("action", "maintenance.past.delete")
+                .put("past_id", normalized.remoteId)
         )
     }
 
-    fun bookService(bike: Bike, booking: ServiceBooking): ServiceBooking {
-        val bikeId = requireBikeId(bike)
-        val description = buildString {
-            if (booking.workshop.isNotBlank()) append("Taller: ${booking.workshop.trim()}")
-            if (booking.contact.isNotBlank()) {
-                if (isNotEmpty()) append('\n')
-                append("Contacto: ${booking.contact.trim()}")
-            }
-        }
+    fun bookService(
+        account: AccountSession,
+        bike: Bike,
+        booking: ServiceBooking
+    ): ServiceBooking {
+        val normalized = normalizeServiceBooking(account, bike, booking, false)
+        val bikeId = normalized.bikeId!!
         val response = postJson(
             JSONObject()
                 .put("action", "maintenance.future.create")
                 .put("bike_id", bikeId)
-                .put("scheduled_date", requireApiDate(booking.date))
-                .put("maintenance_type", booking.service.trim())
-                .put("description", description)
+                .put("scheduled_date", normalized.date)
+                .put("maintenance_type", normalized.service)
+                .put("description", serviceDescription(normalized))
         )
         val saved = response.optJSONObject("maintenance")
             ?: throw RemoteConnectionException("El servidor no devolvió el servicio agendado.")
 
-        return booking.copy(
-            date = saved.optString("scheduled_date", booking.date),
-            remoteId = saved.firstLong("id"),
+        return mergeServiceBooking(normalized, saved, bike, bikeId)
+    }
+
+    fun updateServiceBooking(
+        account: AccountSession,
+        bike: Bike,
+        booking: ServiceBooking
+    ): ServiceBooking {
+        val normalized = normalizeServiceBooking(account, bike, booking, true)
+        val bikeId = normalized.bikeId!!
+        val response = postJson(
+            JSONObject()
+                .put("action", "maintenance.future.update")
+                .put("future_id", normalized.remoteId)
+                .put("bike_id", bikeId)
+                .put("scheduled_date", normalized.date)
+                .put("maintenance_type", normalized.service)
+                .put("description", serviceDescription(normalized))
+        )
+        val saved = response.firstObject("maintenance", "future_maintenance", "item")
+            ?: return normalized
+        return mergeServiceBooking(normalized, saved, bike, bikeId)
+    }
+
+    fun deleteServiceBooking(
+        account: AccountSession,
+        bike: Bike,
+        booking: ServiceBooking
+    ) {
+        val normalized = normalizeServiceBooking(account, bike, booking, true)
+        postJson(
+            JSONObject()
+                .put("action", "maintenance.future.delete")
+                .put("future_id", normalized.remoteId)
+        )
+    }
+
+    fun completeServiceBooking(
+        account: AccountSession,
+        bike: Bike,
+        booking: ServiceBooking,
+        completedDate: String,
+        notes: String
+    ): MaintenanceReminder {
+        val normalized = normalizeServiceBooking(account, bike, booking, true)
+        val bikeId = normalized.bikeId!!
+        val cleanDate = requireApiDate(completedDate)
+        val cleanNotes = notes.trim().ifBlank {
+            "Servicio completado${normalized.workshop.takeIf(String::isNotBlank)?.let { " en $it" }.orEmpty()}."
+        }
+        val response = postJson(
+            JSONObject()
+                .put("action", "maintenance.future.complete")
+                .put("future_id", normalized.remoteId)
+                .put("completed_date", cleanDate)
+                .put("maintenance_type", normalized.service)
+                .put("description", cleanNotes)
+        )
+        val saved = response.firstObject("past_maintenance", "maintenance", "item")
+        val fallback = MaintenanceReminder(
+            bike = bike.name,
+            component = normalized.service,
+            date = cleanDate,
+            notes = cleanNotes,
             bikeId = bikeId
         )
+        return if (saved == null) fallback else mergeMaintenanceReminder(
+            fallback,
+            saved,
+            bike,
+            bikeId
+        )
+    }
+
+    internal fun normalizeMaintenanceReminder(
+        account: AccountSession,
+        bike: Bike,
+        reminder: MaintenanceReminder,
+        requireRemoteId: Boolean
+    ): MaintenanceReminder {
+        val bikeId = requireOwnedBikeId(account, bike)
+        if (reminder.bikeId != null && reminder.bikeId != bikeId) {
+            throw RemoteConnectionException("La mantención no corresponde a esta bicicleta.")
+        }
+        if (requireRemoteId && reminder.remoteId == null) {
+            throw RemoteConnectionException("La mantención no tiene un identificador válido.")
+        }
+        val component = reminder.component.trim()
+        if (component.isBlank()) {
+            throw RemoteConnectionException("Indica el trabajo realizado.")
+        }
+        return reminder.copy(
+            bike = bike.name,
+            component = component,
+            date = requireApiDate(reminder.date),
+            notes = reminder.notes.trim(),
+            bikeId = bikeId
+        )
+    }
+
+    internal fun normalizeServiceBooking(
+        account: AccountSession,
+        bike: Bike,
+        booking: ServiceBooking,
+        requireRemoteId: Boolean
+    ): ServiceBooking {
+        val bikeId = requireOwnedBikeId(account, bike)
+        if (booking.bikeId != null && booking.bikeId != bikeId) {
+            throw RemoteConnectionException("El servicio no corresponde a esta bicicleta.")
+        }
+        if (requireRemoteId && booking.remoteId == null) {
+            throw RemoteConnectionException("El servicio no tiene un identificador válido.")
+        }
+        val workshop = booking.workshop.trim()
+        val service = booking.service.trim()
+        if (workshop.isBlank() || service.isBlank()) {
+            throw RemoteConnectionException("Indica el taller y el servicio requerido.")
+        }
+        return booking.copy(
+            workshop = workshop,
+            service = service,
+            date = requireApiDate(booking.date),
+            contact = booking.contact.trim(),
+            bike = bike.name,
+            bikeId = bikeId
+        )
+    }
+
+    internal fun validateMaintenanceBikeId(expectedBikeId: Long, returnedBikeId: Long?) {
+        if (returnedBikeId != null && returnedBikeId != expectedBikeId) {
+            throw RemoteConnectionException(
+                "El servidor devolvió una mantención de otra bicicleta."
+            )
+        }
+    }
+
+    private fun pastMaintenanceFromJson(
+        item: JSONObject,
+        bike: Bike,
+        bikeId: Long
+    ): MaintenanceReminder {
+        validateMaintenanceBikeId(bikeId, item.firstLong("bike_id", "BikeID"))
+        return MaintenanceReminder(
+            bike = bike.name,
+            component = item.optString("maintenance_type"),
+            date = item.optString("maintenance_date"),
+            notes = item.optString("description"),
+            remoteId = item.firstLong("id", "past_id"),
+            bikeId = bikeId
+        )
+    }
+
+    private fun futureMaintenanceFromJson(
+        item: JSONObject,
+        bike: Bike,
+        bikeId: Long
+    ): ServiceBooking {
+        validateMaintenanceBikeId(bikeId, item.firstLong("bike_id", "BikeID"))
+        val description = item.optString("description")
+        val workshop = description.lineValue("Taller:")
+        val contact = description.lineValue("Contacto:")
+        return ServiceBooking(
+            workshop = workshop,
+            service = item.optString("maintenance_type"),
+            date = item.optString("scheduled_date"),
+            contact = contact.ifBlank { description },
+            bike = bike.name,
+            remoteId = item.firstLong("id", "future_id"),
+            bikeId = bikeId
+        )
+    }
+
+    private fun mergeMaintenanceReminder(
+        requested: MaintenanceReminder,
+        saved: JSONObject,
+        bike: Bike,
+        bikeId: Long
+    ): MaintenanceReminder {
+        val parsed = pastMaintenanceFromJson(saved, bike, bikeId)
+        if (
+            requested.remoteId != null && parsed.remoteId != null &&
+            requested.remoteId != parsed.remoteId
+        ) {
+            throw RemoteConnectionException("El servidor actualizó otra mantención.")
+        }
+        return requested.copy(
+            component = parsed.component.ifBlank { requested.component },
+            date = parsed.date.ifBlank { requested.date },
+            notes = parsed.notes.ifBlank { requested.notes },
+            remoteId = parsed.remoteId ?: requested.remoteId,
+            bikeId = bikeId
+        )
+    }
+
+    private fun mergeServiceBooking(
+        requested: ServiceBooking,
+        saved: JSONObject,
+        bike: Bike,
+        bikeId: Long
+    ): ServiceBooking {
+        val parsed = futureMaintenanceFromJson(saved, bike, bikeId)
+        if (
+            requested.remoteId != null && parsed.remoteId != null &&
+            requested.remoteId != parsed.remoteId
+        ) {
+            throw RemoteConnectionException("El servidor actualizó otro servicio.")
+        }
+        return requested.copy(
+            workshop = parsed.workshop.ifBlank { requested.workshop },
+            service = parsed.service.ifBlank { requested.service },
+            date = parsed.date.ifBlank { requested.date },
+            contact = parsed.contact.ifBlank { requested.contact },
+            remoteId = parsed.remoteId ?: requested.remoteId,
+            bikeId = bikeId
+        )
+    }
+
+    private fun serviceDescription(booking: ServiceBooking): String = buildString {
+        if (booking.workshop.isNotBlank()) append("Taller: ${booking.workshop}")
+        if (booking.contact.isNotBlank()) {
+            if (isNotEmpty()) append('\n')
+            append("Contacto: ${booking.contact}")
+        }
     }
 
     fun loadNearbyMeetups(
@@ -328,6 +687,7 @@ object RemoteConnections {
             val response = postJson(JSONObject(basePayload.toString()).put("offset", offset))
             val page = response.firstArray("juntas", "events", "items")
                 .mapObjects(::meetupFromJson)
+                .filter { it.id.isNotBlank() }
             loaded.addAll(page)
             if (page.size < 100) break
         }
@@ -515,19 +875,64 @@ object RemoteConnections {
                 .put("country_code", event.countryCode)
                 .put("administrative_area", event.administrativeArea)
                 .put("title", event.title.trim())
-                .put("description", event.description.trim())
+                .put(
+                    "description",
+                    encodeMeetupDescription(event.dateTime, event.description)
+                )
                 .put("junta_status", event.status.ifBlank { "activa" })
         )
         val created = response.firstObject("junta", "event", "item")
             ?.let(::meetupFromJson)
+            ?.let { parsed ->
+                parsed.copy(
+                    title = parsed.title.ifBlank { event.title.trim() },
+                    dateTime = parsed.dateTime.ifBlank { event.dateTime.trim() },
+                    description = parsed.description.ifBlank { event.description.trim() },
+                    latitude = parsed.latitude.takeUnless { it == 0.0 } ?: event.latitude,
+                    longitude = parsed.longitude.takeUnless { it == 0.0 } ?: event.longitude,
+                    createdBy = parsed.createdBy.ifBlank { event.createdBy },
+                    createdByUsername = parsed.createdByUsername ?: event.createdByUsername,
+                    region = parsed.region.ifBlank { region },
+                    location = parsed.location.ifBlank { location },
+                    countryCode = parsed.countryCode.ifBlank { event.countryCode },
+                    administrativeArea = parsed.administrativeArea.ifBlank {
+                        event.administrativeArea
+                    }
+                )
+            }
             ?: throw RemoteConnectionException("El servidor no devolvió la junta creada.")
         if (created.id.isBlank()) {
             throw RemoteConnectionException("La junta creada no tiene un ID regional.")
         }
-        if (event.imageUri.isNotBlank()) {
-            uploadMeetupPhoto(context, event.createdBy, created.id, event.imageUri)
+        if (created.createdBy != event.createdBy) {
+            throw RemotePartialSuccessException(
+                message = "La junta se creó, pero el servidor devolvió un propietario inconsistente. Se actualizó la lista para evitar duplicarla.",
+                entityId = created.id
+            )
         }
-        return loadMeetupDetails(created.id)
+        if (event.imageUri.isNotBlank()) {
+            runCatching {
+                uploadMeetupPhoto(context, event.createdBy, created.id, event.imageUri)
+            }.getOrElse { cause ->
+                throw RemotePartialSuccessException(
+                    message = "La junta se creó, pero no fue posible subir su fotografía. Puedes agregarla desde tu perfil.",
+                    entityId = created.id,
+                    cause = cause
+                )
+            }
+        }
+        val detailed = runCatching { loadMeetupDetails(created.id) }
+            .getOrDefault(created)
+            .let { loaded ->
+                loaded.copy(createdBy = loaded.createdBy.ifBlank { event.createdBy })
+            }
+        if (detailed.createdBy != event.createdBy) {
+            throw RemotePartialSuccessException(
+                message = "La junta se creó, pero su detalle devolvió un propietario inconsistente. Se actualizó la lista para evitar duplicarla.",
+                entityId = created.id
+            )
+        }
+        return detailed
     }
 
     fun loadMeetupDetails(juntaId: String): MeetupEvent {
@@ -536,9 +941,13 @@ object RemoteConnections {
                 .put("action", "junta.get")
                 .put("junta_id", juntaId)
         )
-        return response.firstObject("junta", "event", "item")
+        val meetup = response.firstObject("junta", "event", "item")
             ?.let(::meetupFromJson)
             ?: throw RemoteConnectionException("El servidor no devolvió la junta.")
+        if (meetup.id != juntaId) {
+            throw RemoteConnectionException("El servidor devolvió una junta distinta a la solicitada.")
+        }
+        return meetup
     }
 
     fun updateMeetupStatus(userId: String, juntaId: String, status: String): MeetupEvent {
@@ -570,7 +979,7 @@ object RemoteConnections {
                 "user_id" to userId,
                 "junta_id" to juntaId
             ),
-            Uri.parse(imageUri)
+            imageUri.toUri()
         )
     }
 
@@ -613,6 +1022,7 @@ object RemoteConnections {
             val response = postJson(JSONObject(basePayload.toString()).put("offset", offset))
             val page = response.firstArray("posts", "publications", "items")
                 .mapObjects(::marketplaceFromJson)
+                .filter { it.id.isNotBlank() }
             loaded.addAll(page)
             if (page.size < 100) break
         }
@@ -676,16 +1086,66 @@ object RemoteConnections {
                     post.publicationStatus.ifBlank { "activa" }
                 )
         )
-        val created = response.firstObject("post", "publication", "item")
+        val createdObject = response.firstObject("post", "publication", "item")
+        val created = createdObject
             ?.let(::marketplaceFromJson)
+            ?.let { parsed ->
+                parsed.copy(
+                    title = parsed.title.ifBlank { post.title.trim() },
+                    price = parsed.price.ifBlank { price.toString() },
+                    condition = parsed.condition.ifBlank { post.productStatus },
+                    seller = parsed.seller.ifBlank { post.seller },
+                    description = parsed.description.ifBlank { post.description.trim() },
+                    createdBy = parsed.createdBy.ifBlank { post.createdBy },
+                    createdByUsername = parsed.createdByUsername ?: post.createdByUsername,
+                    latitude = parsed.latitude.takeUnless { it == 0.0 } ?: post.latitude,
+                    longitude = parsed.longitude.takeUnless { it == 0.0 } ?: post.longitude,
+                    productStatus = parsed.productStatus.ifBlank { post.productStatus },
+                    region = parsed.region.ifBlank { region },
+                    location = parsed.location.ifBlank { location },
+                    currencyCode = createdObject
+                        .firstString("currency", "currency_code")
+                        ?.uppercase(Locale.ROOT)
+                        ?: post.currencyCode.ifBlank { "CLP" }.uppercase(Locale.ROOT),
+                    countryCode = parsed.countryCode.ifBlank { post.countryCode },
+                    administrativeArea = parsed.administrativeArea.ifBlank {
+                        post.administrativeArea
+                    }
+                )
+            }
             ?: throw RemoteConnectionException("El servidor no devolvió la publicación creada.")
         if (created.id.isBlank()) {
             throw RemoteConnectionException("La publicación creada no tiene un ID regional.")
         }
-        if (post.imageUri.isNotBlank()) {
-            uploadMarketplacePhoto(context, post.createdBy, created.id, post.imageUri)
+        if (created.createdBy != post.createdBy) {
+            throw RemotePartialSuccessException(
+                message = "La publicación se creó, pero el servidor devolvió un propietario inconsistente. Se actualizó la lista para evitar duplicarla.",
+                entityId = created.id
+            )
         }
-        return loadMarketplaceDetails(created.id)
+        if (post.imageUri.isNotBlank()) {
+            runCatching {
+                uploadMarketplacePhoto(context, post.createdBy, created.id, post.imageUri)
+            }.getOrElse { cause ->
+                throw RemotePartialSuccessException(
+                    message = "La publicación se creó, pero no fue posible subir su fotografía. Puedes agregarla desde tu perfil.",
+                    entityId = created.id,
+                    cause = cause
+                )
+            }
+        }
+        val detailed = runCatching { loadMarketplaceDetails(created.id) }
+            .getOrDefault(created)
+            .let { loaded ->
+                loaded.copy(createdBy = loaded.createdBy.ifBlank { post.createdBy })
+            }
+        if (detailed.createdBy != post.createdBy) {
+            throw RemotePartialSuccessException(
+                message = "La publicación se creó, pero su detalle devolvió un propietario inconsistente. Se actualizó la lista para evitar duplicarla.",
+                entityId = created.id
+            )
+        }
+        return detailed
     }
 
     private fun marketplaceWholeUnitPrice(raw: String): Long {
@@ -700,9 +1160,15 @@ object RemoteConnections {
                 .put("action", "marketplace.get")
                 .put("publication_id", publicationId)
         )
-        return response.firstObject("post", "publication", "item")
+        val publication = response.firstObject("post", "publication", "item")
             ?.let(::marketplaceFromJson)
             ?: throw RemoteConnectionException("El servidor no devolvió la publicación.")
+        if (publication.id != publicationId) {
+            throw RemoteConnectionException(
+                "El servidor devolvió una publicación distinta a la solicitada."
+            )
+        }
+        return publication
     }
 
     fun updateMarketplaceStatus(
@@ -733,7 +1199,7 @@ object RemoteConnections {
                 "user_id" to userId,
                 "publication_id" to publicationId
             ),
-            Uri.parse(imageUri)
+            imageUri.toUri()
         )
     }
 
@@ -759,9 +1225,12 @@ object RemoteConnections {
                     .put("offset", 0)
             ).firstArray("publications", "posts", "items")
                 .mapObjects(::marketplaceFromJson)
+                .let { validateOwnMarketplacePosts(userId, it) }
         }
         directResult.getOrNull()?.let { return it }
-        if (accessToken.isNotBlank()) throw directResult.exceptionOrNull()!!
+        directResult.exceptionOrNull()?.let { error ->
+            if (!shouldUseRegionalProfileFallback(error)) throw error
+        }
 
         val region = communityRegionFor(center)
         return statuses.flatMap { status ->
@@ -777,6 +1246,18 @@ object RemoteConnections {
                 .mapObjects(::marketplaceFromJson)
                 .filter { it.createdBy == userId }
         }.distinctBy(ProductPublication::id)
+    }
+
+    internal fun validateOwnMarketplacePosts(
+        userId: String,
+        posts: List<ProductPublication>
+    ): List<ProductPublication> {
+        if (posts.any { it.createdBy != userId }) {
+            throw RemoteConnectionException(
+                "El servidor devolvió publicaciones que no pertenecen a la cuenta activa."
+            )
+        }
+        return posts
     }
 
     fun updateMarketplacePost(
@@ -814,10 +1295,14 @@ object RemoteConnections {
                     .put("user_id", userId)
                     .put("limit", 500)
                     .put("offset", 0)
-            ).firstArray("juntas", "events", "items").mapObjects(::meetupFromJson)
+            ).firstArray("juntas", "events", "items")
+                .mapObjects(::meetupFromJson)
+                .let { validateOwnMeetups(userId, it) }
         }
         directResult.getOrNull()?.let { return it }
-        if (accessToken.isNotBlank()) throw directResult.exceptionOrNull()!!
+        directResult.exceptionOrNull()?.let { error ->
+            if (!shouldUseRegionalProfileFallback(error)) throw error
+        }
 
         val region = communityRegionFor(center)
         return listOf("activa", "pasada").flatMap { status ->
@@ -835,6 +1320,18 @@ object RemoteConnections {
         }.distinctBy(MeetupEvent::id)
     }
 
+    internal fun validateOwnMeetups(
+        userId: String,
+        meetups: List<MeetupEvent>
+    ): List<MeetupEvent> {
+        if (meetups.any { it.createdBy != userId }) {
+            throw RemoteConnectionException(
+                "El servidor devolvió juntas que no pertenecen a la cuenta activa."
+            )
+        }
+        return meetups
+    }
+
     fun updateMeetupEvent(userId: String, event: MeetupEvent): MeetupEvent {
         postJson(
             JSONObject()
@@ -842,7 +1339,10 @@ object RemoteConnections {
                 .put("user_id", userId)
                 .put("junta_id", event.id)
                 .put("title", event.title.trim())
-                .put("description", event.description.trim())
+                .put(
+                    "description",
+                    encodeMeetupDescription(event.dateTime, event.description)
+                )
                 .put("location", event.location)
         )
         return loadMeetupDetails(event.id)
@@ -872,7 +1372,9 @@ object RemoteConnections {
         } else {
             throw primary.exceptionOrNull()!!
         }
-        return response.firstArray("chats", "items").mapObjects(::chatFromJson)
+        return validateChatIds(
+            response.firstArray("chats", "items").mapObjects(::chatFromJson)
+        )
     }
 
     fun loadChatMessages(
@@ -914,8 +1416,12 @@ object RemoteConnections {
         } else {
             throw primary.exceptionOrNull()!!
         }
-        val messages = response.firstArray("messages", "items")
-            .mapObjects(::messageFromJson)
+        val messages = validateMessagesForChat(
+            chatId = chatId,
+            messages = validateMessageIds(
+                response.firstArray("messages", "items").mapObjects(::messageFromJson)
+            )
+        )
         val metadata = response.firstObject("metadata", "sync", "pagination")
         val messageCount = response.firstInt("messageCount", "message_count", "total")
             ?: metadata?.firstInt("messageCount", "message_count", "total")
@@ -962,9 +1468,13 @@ object RemoteConnections {
         } else {
             throw primary.exceptionOrNull()!!
         }
-        return response.firstObject("message", "item")
+        val message = response.firstObject("message", "item")
             ?.let(::messageFromJson)
             ?: throw RemoteConnectionException("El servidor no devolvió el mensaje enviado.")
+        return validateMessagesForChat(
+            chatId = chatId,
+            messages = validateMessageIds(listOf(message))
+        ).single()
     }
 
     fun getOrCreateChat(
@@ -986,8 +1496,40 @@ object RemoteConnections {
                 .put("related_entity_id", relatedEntityId)
                 .put("title", title.trim())
         )
-        return response.firstObject("chat", "item")?.let(::chatFromJson)
+        val chat = response.firstObject("chat", "item")?.let(::chatFromJson)
             ?: throw RemoteConnectionException("El servidor no devolvió la conversación.")
+        return validateChatIds(listOf(chat)).single()
+    }
+
+    internal fun validateChatIds(chats: List<UserChat>): List<UserChat> {
+        if (chats.any { it.id.isBlank() }) {
+            throw RemoteConnectionException("El servidor devolvió una conversación sin ID.")
+        }
+        return chats
+    }
+
+    internal fun validateMessageIds(messages: List<StoredMessage>): List<StoredMessage> {
+        if (messages.any { it.id.isBlank() }) {
+            throw RemoteConnectionException("El servidor devolvió un mensaje sin ID.")
+        }
+        return messages
+    }
+
+    internal fun validateMessagesForChat(
+        chatId: String,
+        messages: List<StoredMessage>
+    ): List<StoredMessage> {
+        if (chatId.isBlank()) {
+            throw RemoteConnectionException("La conversación solicitada no tiene un ID válido.")
+        }
+        if (messages.any { it.chatId.isNotBlank() && it.chatId != chatId }) {
+            throw RemoteConnectionException(
+                "El servidor devolvió mensajes de una conversación distinta."
+            )
+        }
+        return messages.map { message ->
+            if (message.chatId.isBlank()) message.copy(chatId = chatId) else message
+        }
     }
 
     fun loadSportsConnections(userId: String): List<SyncPlatform> {
@@ -1054,11 +1596,15 @@ object RemoteConnections {
 
     fun userFriendlyError(error: Throwable): String {
         val causes = generateSequence(error) { it.cause }.toList()
+        val partialMessage = causes.filterIsInstance<RemotePartialSuccessException>()
+            .firstOrNull()
+            ?.message
         val remoteMessage = causes.filterIsInstance<RemoteConnectionException>()
             .firstOrNull()
             ?.message
 
         return when {
+            !partialMessage.isNullOrBlank() -> partialMessage
             causes.any { it is UnknownHostException } ->
                 "No se pudo encontrar el servidor. Revisa tu conexión a internet."
             causes.any { it is java.net.SocketTimeoutException } ->
@@ -1071,11 +1617,30 @@ object RemoteConnections {
     }
 
     private fun postJson(payload: JSONObject): JSONObject {
-        return executeRequest("application/json; charset=utf-8") { connection ->
+        val action = payload.optString("action")
+        return executeRequest(
+            contentType = "application/json; charset=utf-8",
+            includeAuthorization = shouldAuthenticateAction(action)
+        ) { connection ->
             connection.outputStream.use { output ->
                 output.write(payload.toString().toByteArray(StandardCharsets.UTF_8))
             }
         }
+    }
+
+    internal fun shouldAuthenticateAction(action: String): Boolean =
+        action.isBlank() || action !in PUBLIC_ACTIONS
+
+    internal fun shouldUseRegionalProfileFallback(
+        error: Throwable,
+        hasAccessToken: Boolean = accessToken.isNotBlank()
+    ): Boolean {
+        val remote = generateSequence(error) { it.cause }
+            .filterIsInstance<RemoteConnectionException>()
+            .firstOrNull()
+            ?: return false
+        return remote.statusCode in setOf(400, 404, 501) ||
+            (remote.statusCode == 401 && !hasAccessToken)
     }
 
     private fun getResource(path: String, parameters: Map<String, String>): JSONObject {
@@ -1121,12 +1686,19 @@ object RemoteConnections {
             val text = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
             val response = runCatching { JSONObject(text) }.getOrElse {
                 throw RemoteConnectionException(
-                    "El endpoint ${pathFromUrl(url)} no está disponible todavía en el servidor."
+                    if (status in 200..299) {
+                        "El endpoint ${pathFromUrl(url)} no devolvió una respuesta válida."
+                    } else {
+                        httpFailureMessage(status)
+                    },
+                    statusCode = status
                 )
             }
             if (status !in 200..299 || !response.optBoolean("ok", true)) {
                 throw RemoteConnectionException(
-                    response.optString("message", "Error HTTP $status")
+                    response.optString("message").ifBlank { httpFailureMessage(status) },
+                    statusCode = status,
+                    remoteCode = response.optString("code").takeIf(String::isNotBlank)
                 )
             }
             return response
@@ -1197,9 +1769,7 @@ object RemoteConnections {
             ?: throw RemoteConnectionException(
                 "El servidor no devolvió el contenido de la fotografía."
             )
-        return runCatching { Base64.decode(content, Base64.DEFAULT) }.getOrElse {
-            throw RemoteConnectionException("La fotografía recibida no es válida.", it)
-        }
+        return decodePhotoContent(content)
     }
 
     private fun communityLocation(region: String, point: GeoPoint): String {
@@ -1276,6 +1846,7 @@ object RemoteConnections {
         fields: Map<String, String>,
         imageUri: Uri
     ): JSONObject {
+        validateImageSize(context, imageUri)
         val boundary = "AppBike-${UUID.randomUUID()}"
         val mimeType = context.contentResolver.getType(imageUri)
             ?.takeIf { it in setOf("image/jpeg", "image/png", "image/webp") }
@@ -1306,7 +1877,7 @@ object RemoteConnections {
                 output.write("Content-Type: $mimeType\r\n\r\n".toByteArray())
 
                 context.contentResolver.openInputStream(imageUri)?.use { input ->
-                    input.copyTo(output)
+                    copyImageWithLimit(input, output)
                 } ?: throw RemoteConnectionException("No fue posible leer la fotografía seleccionada.")
 
                 output.write("\r\n--$boundary--\r\n".toByteArray())
@@ -1321,6 +1892,7 @@ object RemoteConnections {
         imageUri: Uri,
         fileField: String
     ): JSONObject {
+        validateImageSize(context, imageUri)
         val boundary = "AppBike-${UUID.randomUUID()}"
         val mimeType = context.contentResolver.getType(imageUri)
             ?.takeIf { it in setOf("image/jpeg", "image/png", "image/webp") }
@@ -1362,7 +1934,7 @@ object RemoteConnections {
                 )
                 output.write("Content-Type: $mimeType\r\n\r\n".toByteArray())
                 context.contentResolver.openInputStream(imageUri)?.use { input ->
-                    input.copyTo(output)
+                    copyImageWithLimit(input, output)
                 } ?: throw RemoteConnectionException(
                     "No fue posible leer la fotografía seleccionada."
                 )
@@ -1373,12 +1945,19 @@ object RemoteConnections {
             val text = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
             val response = runCatching { JSONObject(text) }.getOrElse {
                 throw RemoteConnectionException(
-                    "El endpoint ${pathFromUrl(connection.url.toString())} no está disponible."
+                    if (status in 200..299) {
+                        "El endpoint ${pathFromUrl(connection.url.toString())} no devolvió una respuesta válida."
+                    } else {
+                        httpFailureMessage(status)
+                    },
+                    statusCode = status
                 )
             }
             if (status !in 200..299 || !response.optBoolean("ok", true)) {
                 throw RemoteConnectionException(
-                    response.optString("message", "Error HTTP $status")
+                    response.optString("message").ifBlank { httpFailureMessage(status) },
+                    statusCode = status,
+                    remoteCode = response.optString("code").takeIf(String::isNotBlank)
                 )
             }
             return response
@@ -1387,9 +1966,53 @@ object RemoteConnections {
         }
     }
 
+    private fun decodePhotoContent(encodedContent: String): ByteArray {
+        val estimatedSize = encodedContent.length.toLong() * 3L / 4L
+        if (estimatedSize > MAX_IMAGE_BYTES) {
+            throw RemoteConnectionException("La fotografía recibida supera el máximo de 20 MB.")
+        }
+        return runCatching { Base64.decode(encodedContent, Base64.DEFAULT) }
+            .getOrElse {
+                throw RemoteConnectionException("La fotografía recibida no es válida.", it)
+            }
+            .also { bytes ->
+                if (bytes.size.toLong() > MAX_IMAGE_BYTES) {
+                    throw RemoteConnectionException(
+                        "La fotografía recibida supera el máximo de 20 MB."
+                    )
+                }
+            }
+    }
+
+    private fun validateImageSize(context: Context, imageUri: Uri) {
+        val length = runCatching {
+            context.contentResolver.openAssetFileDescriptor(imageUri, "r")?.use { it.length }
+        }.getOrNull() ?: -1L
+        if (length > MAX_IMAGE_BYTES) {
+            throw RemoteConnectionException("La fotografía supera el máximo permitido de 20 MB.")
+        }
+    }
+
+    private fun copyImageWithLimit(input: InputStream, output: OutputStream) {
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var total = 0L
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            total += count
+            if (total > MAX_IMAGE_BYTES) {
+                throw RemoteConnectionException(
+                    "La fotografía supera el máximo permitido de 20 MB."
+                )
+            }
+            output.write(buffer, 0, count)
+        }
+    }
+
     private fun executeRequest(
         contentType: String,
         readTimeout: Int = 20_000,
+        includeAuthorization: Boolean = true,
         writeBody: (HttpURLConnection) -> Unit
     ): JSONObject {
         val connection = URL(API_URL).openConnection() as HttpURLConnection
@@ -1401,7 +2024,7 @@ object RemoteConnections {
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", contentType)
             connection.setRequestProperty("Accept", "application/json")
-            applyAuthorization(connection)
+            if (includeAuthorization) applyAuthorization(connection)
             writeBody(connection)
 
             val statusCode = connection.responseCode
@@ -1415,12 +2038,23 @@ object RemoteConnections {
                 ?.use { it.readText() }
                 .orEmpty()
             val response = runCatching { JSONObject(responseText) }.getOrElse {
-                throw RemoteConnectionException("El servidor devolvió una respuesta no válida.")
+                throw RemoteConnectionException(
+                    if (statusCode in 200..299) {
+                        "El servidor devolvió una respuesta no válida."
+                    } else {
+                        httpFailureMessage(statusCode)
+                    },
+                    statusCode = statusCode
+                )
             }
 
             if (statusCode !in 200..299 || !response.optBoolean("ok", true)) {
                 throw RemoteConnectionException(
-                    response.optString("message", "Error HTTP $statusCode")
+                    response.optString("message").ifBlank {
+                        httpFailureMessage(statusCode)
+                    },
+                    statusCode = statusCode,
+                    remoteCode = response.optString("code").takeIf(String::isNotBlank)
                 )
             }
 
@@ -1441,6 +2075,17 @@ object RemoteConnections {
         accessToken.takeIf(String::isNotBlank)?.let {
             connection.setRequestProperty("Authorization", "Bearer $it")
         }
+    }
+
+    private fun httpFailureMessage(statusCode: Int): String = when (statusCode) {
+        400 -> "La solicitud no es válida. Revisa los datos e inténtalo nuevamente."
+        401 -> "Tu sesión o tus credenciales no son válidas. Vuelve a iniciar sesión."
+        403 -> "No tienes permiso para realizar esta acción."
+        404 -> "El contenido solicitado ya no está disponible."
+        409 -> "La información cambió en el servidor. Actualiza e inténtalo nuevamente."
+        429 -> "Se hicieron demasiadas solicitudes. Espera un momento e inténtalo de nuevo."
+        in 500..599 -> "El servidor no está disponible en este momento. Inténtalo más tarde."
+        else -> "No fue posible completar la solicitud (HTTP $statusCode)."
     }
 
     internal fun bikeFromJson(item: JSONObject): Bike {
@@ -1487,16 +2132,18 @@ object RemoteConnections {
 
     internal fun meetupFromJson(item: JSONObject): MeetupEvent {
         val location = item.optString("location")
-        val description = item.optString("description")
+        val descriptionParts = decodeMeetupDescription(
+            rawDescription = item.optString("description"),
+            explicitDateTime = item.firstString("dateTime", "date_time").orEmpty()
+        )
         val point = parseCommunityLocation(location)
         val photos = item.optJSONArray("photos") ?: item.optJSONArray("images")
         val parentId = item.firstString("id", "event_id").orEmpty()
         return MeetupEvent(
             id = parentId,
             title = item.optString("title"),
-            dateTime = item.firstString("dateTime", "date_time")
-                ?: description.lineValue("Fecha y hora:"),
-            description = description,
+            dateTime = descriptionParts.dateTime,
+            description = descriptionParts.description,
             latitude = item.firstDouble("latitude", "lat") ?: point?.latitude ?: 0.0,
             longitude = item.firstDouble("longitude", "lng") ?: point?.longitude ?: 0.0,
             createdBy = item.firstString("createdBy", "created_by", "user_id").orEmpty(),
@@ -1633,13 +2280,31 @@ object RemoteConnections {
         if (photoId.isNotBlank() && photoId != "null") {
             return "appbike-photo://$photoId"
         }
-        return publicPhotoUrl(path)
+        return safePublicPhotoUrl(path)
     }
 
-    private fun publicPhotoUrl(path: String): String {
-        if (path.isBlank() || path == "null") return ""
-        if (path.startsWith("http://") || path.startsWith("https://")) return path
-        return PUBLIC_BASE_URL + path.trimStart('/')
+    internal fun safePublicPhotoUrl(path: String): String {
+        val clean = path.trim()
+        if (clean.isBlank() || clean.equals("null", ignoreCase = true)) return ""
+        val lower = clean.lowercase(Locale.ROOT)
+        val exposesInternalPath = lower.contains("bikesphotos/personalbikesphotos") ||
+            lower.contains("appbikeinternal") ||
+            lower.contains("internal-auth") ||
+            lower.contains("/srv/") ||
+            lower.contains("/var/") ||
+            clean.contains('\\') ||
+            clean.contains("..") ||
+            Regex("^[A-Za-z]:[/\\\\]").containsMatchIn(clean)
+        if (exposesInternalPath || clean.startsWith("//")) return ""
+
+        if (lower.startsWith("https://")) {
+            val host = runCatching { URL(clean).host.lowercase(Locale.ROOT) }.getOrNull()
+                ?: return ""
+            return clean.takeIf { host == "zizzio.cl" || host.endsWith(".zizzio.cl") }
+                .orEmpty()
+        }
+        if (Regex("^[A-Za-z][A-Za-z0-9+.-]*:").containsMatchIn(clean)) return ""
+        return PUBLIC_BASE_URL + clean.trimStart('/')
     }
 
     private fun requireBikeId(bike: Bike): Long =
@@ -1649,7 +2314,13 @@ object RemoteConnections {
 
     private fun requireApiDate(rawDate: String): String {
         val clean = rawDate.trim()
-        if (!Regex("""^\d{4}-\d{2}-\d{2}$""").matches(clean)) {
+        val isRealDate = Regex("""^\d{4}-\d{2}-\d{2}$""").matches(clean) &&
+            runCatching {
+                SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).apply {
+                    isLenient = false
+                }.parse(clean) != null
+            }.getOrDefault(false)
+        if (!isRealDate) {
             throw RemoteConnectionException("La fecha debe tener formato AAAA-MM-DD.")
         }
         return clean
@@ -1709,14 +2380,16 @@ object RemoteConnections {
             for (index in 0 until length()) {
                 val raw = opt(index)
                 when (raw) {
-                    is String -> raw.takeIf { it.isNotBlank() && it != "null" }?.let(::add)
+                    is String -> safePublicPhotoUrl(raw).takeIf(String::isNotBlank)?.let(::add)
                     is JSONObject -> {
                         val photoId = raw.firstString("photo_id", "id")
                         val url = raw.firstString("url", "image_url", "path")
                         when {
                             !photoId.isNullOrBlank() && parentId.isNotBlank() ->
                                 add("appbike-$type-photo://$parentId/$photoId")
-                            !url.isNullOrBlank() -> add(publicPhotoUrl(url))
+                            !url.isNullOrBlank() -> safePublicPhotoUrl(url)
+                                .takeIf(String::isNotBlank)
+                                ?.let(::add)
                         }
                     }
                 }
@@ -1754,6 +2427,7 @@ object RemoteConnections {
         keys.forEach { key ->
             if (!has(key) || isNull(key)) return@forEach
             val parsed = when (val value = opt(key)) {
+                null -> null
                 is Number -> value.toLong()
                 is String -> value.toLongOrNull()
                 else -> null
@@ -1767,6 +2441,7 @@ object RemoteConnections {
         keys.forEach { key ->
             if (!has(key) || isNull(key)) return@forEach
             val parsed = when (val value = opt(key)) {
+                null -> null
                 is Number -> value.toLong()
                 is String -> value.toLongOrNull()
                 else -> null
@@ -1780,6 +2455,7 @@ object RemoteConnections {
         keys.forEach { key ->
             if (!has(key) || isNull(key)) return@forEach
             val parsed = when (val value = opt(key)) {
+                null -> null
                 is Number -> value.toInt()
                 is String -> value.toIntOrNull()
                 else -> null
@@ -1793,6 +2469,7 @@ object RemoteConnections {
         keys.forEach { key ->
             if (!has(key) || isNull(key)) return@forEach
             val parsed = when (val value = opt(key)) {
+                null -> null
                 is Number -> value.toDouble()
                 is String -> value.toDoubleOrNull()
                 else -> null
@@ -1815,6 +2492,14 @@ object RemoteConnections {
 
     class RemoteConnectionException(
         message: String,
+        cause: Throwable? = null,
+        val statusCode: Int? = null,
+        val remoteCode: String? = null
+    ) : RuntimeException(message, cause)
+
+    class RemotePartialSuccessException(
+        message: String,
+        val entityId: String,
         cause: Throwable? = null
     ) : RuntimeException(message, cause)
 }

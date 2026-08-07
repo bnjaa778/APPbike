@@ -3,20 +3,21 @@ package com.example.appbike
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
+import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.Image
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,10 +30,14 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.DirectionsBike
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.PersonOutline
+import androidx.compose.material.icons.outlined.Storefront
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
@@ -41,26 +46,37 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import com.example.appbike.ui.theme.APPbikeTheme
 import com.example.appbike.ui.theme.AppBackgroundElevated
+import com.example.appbike.ui.theme.AppBorderSubtle
 import com.example.appbike.ui.theme.AppPrimaryBright
 import com.example.appbike.ui.theme.AppPrimarySoft
 import com.example.appbike.ui.theme.AppSurfaceElevated
@@ -80,7 +96,10 @@ class MainActivity : ComponentActivity() {
         captureSportsOauth(intent)
         captureNotificationTarget(intent)
         ChatNotificationCenter.createChannel(this)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
 
         setContent {
             APPbikeTheme(dynamicColor = false) {
@@ -120,7 +139,7 @@ class MainActivity : ComponentActivity() {
         ) return
         val prefs = getSharedPreferences("appbike_permissions", MODE_PRIVATE)
         if (prefs.getBoolean("notifications_listener_v2_asked", false)) return
-        prefs.edit().putBoolean("notifications_listener_v2_asked", true).apply()
+        prefs.edit { putBoolean("notifications_listener_v2_asked", true) }
         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
@@ -139,21 +158,31 @@ class MainActivity : ComponentActivity() {
         val chatId = intent?.getStringExtra(ChatNotificationCenter.EXTRA_CHAT_ID)
             ?.takeIf(String::isNotBlank)
             ?: return
+        val recipientUserId = intent
+            .getStringExtra(ChatNotificationCenter.EXTRA_RECIPIENT_USER_ID)
+            ?.takeIf(String::isNotBlank)
+            ?: run {
+                intent.removeExtra(ChatNotificationCenter.EXTRA_CHAT_ID)
+                return
+            }
         val type = runCatching {
             ChatType.valueOf(
                 intent.getStringExtra(ChatNotificationCenter.EXTRA_CHAT_TYPE).orEmpty()
             )
         }.getOrDefault(ChatType.SOCIAL)
         notificationChatTarget.value = NotificationChatTarget(
+            recipientUserId = recipientUserId,
             chatId = chatId,
             type = type,
             title = intent.getStringExtra(ChatNotificationCenter.EXTRA_CHAT_TITLE).orEmpty()
         )
         intent.removeExtra(ChatNotificationCenter.EXTRA_CHAT_ID)
+        intent.removeExtra(ChatNotificationCenter.EXTRA_RECIPIENT_USER_ID)
     }
 }
 
 data class NotificationChatTarget(
+    val recipientUserId: String,
     val chatId: String,
     val type: ChatType,
     val title: String
@@ -169,7 +198,7 @@ data class NotificationChatTarget(
 private data class MainDestination(
     val label: String,
     val screen: AppScreen,
-    val iconAsset: String
+    val icon: ImageVector
 )
 
 @Composable
@@ -191,7 +220,7 @@ fun AppBikeApp(
     var chatToOpen by remember { mutableStateOf<UserChat?>(null) }
     val pendingNotifications = remember { mutableStateListOf<MessageNotificationEvent>() }
     var activeNotification by remember { mutableStateOf<MessageNotificationEvent?>(null) }
-    var unreadMessages by remember { mutableStateOf(0) }
+    var unreadMessages by remember { mutableIntStateOf(0) }
     val platforms = remember {
         mutableStateListOf(
             SyncPlatform("strava", "Strava", "Actividades, rutas y entrenamientos.", false),
@@ -202,14 +231,14 @@ fun AppBikeApp(
 
     val destinations = remember {
         listOf(
-            MainDestination("Mapas", AppScreen.ROUTES, "navigation/mapas-logo.png"),
+            MainDestination("Mapas", AppScreen.ROUTES, Icons.Outlined.Map),
             MainDestination(
                 "Bicicletas",
                 AppScreen.BIKES,
-                "navigation/bicicletas-logo.png"
+                Icons.AutoMirrored.Outlined.DirectionsBike
             ),
-            MainDestination("Marketplace", AppScreen.MARKETPLACE, "navigation/marketplace-logo.png"),
-            MainDestination("Chat", AppScreen.CHAT, "navigation/chat-logo.png")
+            MainDestination("Marketplace", AppScreen.MARKETPLACE, Icons.Outlined.Storefront),
+            MainDestination("Chat", AppScreen.CHAT, Icons.Outlined.ChatBubbleOutline)
         )
     }
 
@@ -226,6 +255,7 @@ fun AppBikeApp(
         if (session == null) {
             ChatNotificationCenter.stopListener(context)
             ChatNotificationCenter.cancelBackgroundChecks(context)
+            ChatNotificationCenter.clearNotifications(context)
             pendingNotifications.clear()
             activeNotification = null
             unreadMessages = 0
@@ -235,10 +265,13 @@ fun AppBikeApp(
         ChatNotificationCenter.scheduleBackgroundChecks(context)
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(accountSession?.userId) {
+        val activeUserId = accountSession?.userId ?: return@LaunchedEffect
         ChatNotificationEventBus.events.collect { event ->
-            pendingNotifications.add(event)
-            unreadMessages += 1
+            if (isNotificationForActiveUser(event.recipientUserId, activeUserId)) {
+                pendingNotifications.add(event)
+                unreadMessages += 1
+            }
         }
     }
 
@@ -254,40 +287,46 @@ fun AppBikeApp(
         activeNotification = null
     }
 
-    LaunchedEffect(notificationTarget?.chatId) {
+    LaunchedEffect(notificationTarget?.chatId, accountSession?.userId) {
         val target = notificationTarget ?: return@LaunchedEffect
+        if (!isNotificationForActiveUser(target.recipientUserId, accountSession?.userId)) {
+            onNotificationTargetConsumed()
+            return@LaunchedEffect
+        }
         chatToOpen = target.asChat()
         currentScreen = AppScreen.CHAT
         unreadMessages = 0
         onNotificationTargetConsumed()
     }
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            AppTopBar(
-                session = accountSession,
-                accountSelected = currentScreen == AppScreen.ACCOUNT,
-                onAccountClick = { currentScreen = AppScreen.ACCOUNT }
-            )
-        },
-        bottomBar = {
-            AppBottomBar(
-                destinations = destinations,
-                currentScreen = currentScreen,
-                unreadMessages = unreadMessages,
-                onNavigate = {
-                    if (it == AppScreen.CHAT) unreadMessages = 0
-                    currentScreen = it
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        compositingStrategy = CompositingStrategy.Offscreen
+                    }
+                    .zIndex(1f)
+            ) {
+                androidx.compose.runtime.key(currentScreen) {
+                    AppTopBar(
+                        session = accountSession,
+                        accountSelected = currentScreen == AppScreen.ACCOUNT,
+                        onAccountClick = { currentScreen = AppScreen.ACCOUNT }
+                    )
                 }
-            )
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .clipToBounds()
+            ) {
             when (currentScreen) {
                 AppScreen.ACCOUNT, AppScreen.SYNC -> AccountScreen(
                     session = accountSession,
@@ -307,6 +346,7 @@ fun AppBikeApp(
                     onLogout = {
                         ChatNotificationCenter.stopListener(context)
                         ChatNotificationCenter.cancelBackgroundChecks(context)
+                        ChatNotificationCenter.clearNotifications(context)
                         AccountStore.clearSession(context)
                         RemoteConnections.setSession(null)
                         accountSession = null
@@ -326,45 +366,85 @@ fun AppBikeApp(
                 )
 
                 AppScreen.MARKETPLACE, AppScreen.CREATE_PUBLICATION ->
-                    MarketplaceScreen(accountSession) { chat ->
+                    MarketplaceScreen(
+                        account = accountSession,
+                        onOpenChat = { chat ->
+                            chatToOpen = chat
+                            currentScreen = AppScreen.CHAT
+                        },
+                        onOpenAccount = { currentScreen = AppScreen.ACCOUNT }
+                    )
+
+                AppScreen.ROUTES, AppScreen.HOME -> RoutesScreen(
+                    account = accountSession,
+                    onOpenChat = { chat ->
                         chatToOpen = chat
                         currentScreen = AppScreen.CHAT
-                    }
-
-                AppScreen.ROUTES, AppScreen.HOME -> RoutesScreen(accountSession) { chat ->
-                    chatToOpen = chat
-                    currentScreen = AppScreen.CHAT
-                }
+                    },
+                    onOpenAccount = { currentScreen = AppScreen.ACCOUNT }
+                )
 
                 AppScreen.CHAT -> ChatScreen(
-                    accountSession,
+                    account = accountSession,
                     initialChat = chatToOpen,
-                    onInitialChatConsumed = { chatToOpen = null }
+                    onInitialChatConsumed = { chatToOpen = null },
+                    onOpenAccount = { currentScreen = AppScreen.ACCOUNT }
                 )
             }
 
             val notification = activeNotification
-            AnimatedVisibility(
-                visible = notification != null,
+            InAppNotificationVisibility(
+                event = notification,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(horizontal = 12.dp, vertical = 8.dp),
-                enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
-            ) {
-                notification?.let { event ->
-                    InAppMessageBanner(
-                        event = event,
-                        onOpen = {
-                            chatToOpen = event.asChat()
-                            currentScreen = AppScreen.CHAT
-                            unreadMessages = 0
-                            activeNotification = null
-                        },
-                        onDismiss = { activeNotification = null }
-                    )
+                onOpen = { event ->
+                    chatToOpen = event.asChat()
+                    currentScreen = AppScreen.CHAT
+                    unreadMessages = 0
+                    activeNotification = null
                 }
+            ) { activeNotification = null }
             }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .zIndex(1f)
+            ) {
+                AppBottomBar(
+                    destinations = destinations,
+                    currentScreen = currentScreen,
+                    unreadMessages = unreadMessages,
+                    onNavigate = {
+                        if (it == AppScreen.CHAT) unreadMessages = 0
+                        currentScreen = it
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun InAppNotificationVisibility(
+    event: MessageNotificationEvent?,
+    modifier: Modifier = Modifier,
+    onOpen: (MessageNotificationEvent) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AnimatedVisibility(
+        visible = event != null,
+        modifier = modifier,
+        enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+        exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
+    ) {
+        event?.let { visibleEvent ->
+            InAppMessageBanner(
+                event = visibleEvent,
+                onOpen = { onOpen(visibleEvent) },
+                onDismiss = onDismiss
+            )
         }
     }
 }
@@ -415,48 +495,100 @@ private fun InAppMessageBanner(
 }
 
 @Composable
-private fun AppTopBar(
+internal fun AppTopBar(
     session: AccountSession?,
     accountSelected: Boolean,
     onAccountClick: () -> Unit
 ) {
+    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val compactCopy = LocalDensity.current.fontScale >= 1.6f || isLandscape
     Surface(
-        modifier = Modifier.statusBarsPadding(),
+        modifier = Modifier
+            .statusBarsPadding(),
         color = AppBackgroundElevated,
+        border = BorderStroke(1.dp, AppBorderSubtle),
         tonalElevation = 0.dp,
         shadowElevation = 0.dp
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 14.dp),
+                .padding(
+                    horizontal = 20.dp,
+                    vertical = if (isLandscape) 4.dp else 14.dp
+                ),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
-                Text(
-                    text = "APPBIKE",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Black,
-                    color = AppTextPrimary
-                )
-                Spacer(Modifier.height(1.dp))
-                Text(
-                    text = "Rendimiento. Ruta. Comunidad.",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = AppPrimaryBright
-                )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .clearAndSetSemantics {
+                        contentDescription = if (compactCopy) {
+                            "APPBIKE. RIDE, CONNECT"
+                        } else {
+                            "APPBIKE. RIDE, CONNECT, GROW"
+                        }
+                        heading()
+                    }
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "APP",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Black,
+                        color = AppTextPrimary
+                    )
+                    Text(
+                        text = "BIKE",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Black,
+                        color = AppPrimaryBright
+                    )
+                    if (isLandscape) {
+                        Spacer(Modifier.width(16.dp))
+                        Text(
+                            text = "RIDE  •  CONNECT",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AppPrimaryBright,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                if (!isLandscape) {
+                    Spacer(Modifier.height(1.dp))
+                    Text(
+                        text = if (compactCopy) {
+                            "RIDE  •  CONNECT"
+                        } else {
+                            "RIDE  •  CONNECT  •  GROW"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AppPrimaryBright,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
 
             Surface(
+                modifier = Modifier.size(48.dp),
                 shape = MaterialTheme.shapes.large,
                 color = if (accountSelected) {
                     AppPrimarySoft
                 } else {
                     AppSurfaceElevated
-                }
+                },
+                border = BorderStroke(
+                    1.dp,
+                    if (accountSelected) AppPrimaryBright.copy(alpha = 0.70f) else AppBorderSubtle
+                )
             ) {
-                IconButton(onClick = onAccountClick) {
+                IconButton(
+                    modifier = Modifier.fillMaxSize(),
+                    onClick = onAccountClick
+                ) {
                     BadgedBox(
                         badge = {
                             if (session != null) {
@@ -466,7 +598,7 @@ private fun AppTopBar(
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.PersonOutline,
-                            contentDescription = "Cuenta y sincronizacion",
+                            contentDescription = "Cuenta y sincronización",
                             tint = if (accountSelected) {
                                 AppPrimaryBright
                             } else {
@@ -487,6 +619,8 @@ private fun AppBottomBar(
     unreadMessages: Int,
     onNavigate: (AppScreen) -> Unit
 ) {
+    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val compactLabels = LocalDensity.current.fontScale >= 1.6f
     Surface(
         modifier = Modifier.navigationBarsPadding(),
         color = AppBackgroundElevated,
@@ -494,6 +628,7 @@ private fun AppBottomBar(
         tonalElevation = 0.dp
     ) {
         NavigationBar(
+            modifier = Modifier.height(if (isLandscape) 56.dp else 80.dp),
             containerColor = AppBackgroundElevated,
             tonalElevation = 0.dp
         ) {
@@ -501,6 +636,15 @@ private fun AppBottomBar(
                 val selected = currentScreen == destination.screen ||
                     (destination.screen == AppScreen.MARKETPLACE &&
                         currentScreen == AppScreen.CREATE_PUBLICATION)
+                val visibleLabel = if (compactLabels) {
+                    when (destination.screen) {
+                        AppScreen.BIKES -> "Bicis"
+                        AppScreen.MARKETPLACE -> "Tienda"
+                        else -> destination.label
+                    }
+                } else {
+                    destination.label
+                }
 
                 NavigationBarItem(
                     selected = selected,
@@ -513,14 +657,29 @@ private fun AppBottomBar(
                                 }
                             }
                         ) {
-                            NavigationLogoIcon(
-                                assetPath = destination.iconAsset
+                            Icon(
+                                imageVector = destination.icon,
+                                contentDescription = destination.label,
+                                modifier = Modifier.size(if (isLandscape) 24.dp else 26.dp)
                             )
                         }
                     },
-                    label = { Text(destination.label, maxLines = 1) },
+                    label = if (isLandscape) {
+                        null
+                    } else {
+                        {
+                            Text(
+                                visibleLabel,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold
+                            )
+                        }
+                    },
+                    alwaysShowLabel = !isLandscape,
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = AppTextPrimary,
+                        selectedIconColor = AppPrimaryBright,
                         selectedTextColor = AppPrimaryBright,
                         indicatorColor = AppPrimarySoft,
                         unselectedIconColor = AppTextSecondary,
@@ -530,19 +689,4 @@ private fun AppBottomBar(
             }
         }
     }
-}
-
-@Composable
-private fun NavigationLogoIcon(assetPath: String) {
-    val context = LocalContext.current
-    val image = remember(assetPath) {
-        context.assets.open(assetPath).use(BitmapFactory::decodeStream).asImageBitmap()
-    }
-
-    Image(
-        bitmap = image,
-        contentDescription = null,
-        modifier = Modifier.size(28.dp),
-        contentScale = ContentScale.Fit
-    )
 }

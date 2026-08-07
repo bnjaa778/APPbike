@@ -11,10 +11,18 @@ class SecureTokenStoreInstrumentedTest {
     @Test
     fun encryptedTokenRoundTripAndClear() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        SecureTokenStore.clear(context)
-        SecureTokenStore.save(context, "test-token-not-plain-session-data")
-        assertEquals("test-token-not-plain-session-data", SecureTokenStore.load(context))
-        SecureTokenStore.clear(context)
-        assertEquals("", SecureTokenStore.load(context))
+        val originalToken = SecureTokenStore.load(context)
+        try {
+            SecureTokenStore.clear(context)
+            SecureTokenStore.save(context, "test-token-not-plain-session-data")
+            assertEquals("test-token-not-plain-session-data", SecureTokenStore.load(context))
+            SecureTokenStore.clear(context)
+            assertEquals("", SecureTokenStore.load(context))
+        } finally {
+            SecureTokenStore.clear(context)
+            if (originalToken.isNotBlank()) {
+                SecureTokenStore.save(context, originalToken)
+            }
+        }
     }
 }

@@ -41,9 +41,11 @@ región desde coordenadas y aplicar distancia/paginación en PostgreSQL.
 
 La ubicación elegida continúa guardándose solo en `LocalDataStore`; no forma
 parte del perfil remoto. El geocodificador Android entrega sugerencias en vivo.
-La app intenta primero `location.search`/`location.reverse`; mientras el servidor
-responda HTTP 400, usa geocodificacion del dispositivo y Nominatim como respaldo
-temporal con cache, timeout y limite de frecuencia.
+La app intenta primero `location.search`/`location.reverse`. La comprobacion del
+2026-08-06 confirma resultados normalizados en `location.search`, mientras
+`location.reverse` aun puede responder HTTP 400 `unknown_region` para
+coordenadas validas. El dispositivo y Nominatim siguen como respaldo temporal
+con cache, timeout y limite de frecuencia.
 
 ## Marketplace
 

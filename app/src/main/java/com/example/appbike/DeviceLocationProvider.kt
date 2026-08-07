@@ -7,13 +7,11 @@ import android.content.pm.PackageManager
 import android.location.Address
 import android.location.Geocoder
 import android.location.Location
-import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
-import android.os.Bundle
 import android.os.CancellationSignal
-import android.os.Looper
 import androidx.core.content.ContextCompat
+import androidx.core.location.LocationManagerCompat
 import androidx.annotation.RequiresApi
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
@@ -160,36 +158,16 @@ internal object DeviceLocationProvider {
         manager: LocationManager,
         provider: String
     ): Location? = suspendCancellableCoroutine { continuation ->
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val cancellationSignal = CancellationSignal()
-            manager.getCurrentLocation(
-                provider,
-                cancellationSignal,
-                context.mainExecutor
-            ) { location ->
-                if (continuation.isActive) continuation.resume(location)
-            }
-            continuation.invokeOnCancellation { cancellationSignal.cancel() }
-        } else {
-            val listener = object : LocationListener {
-                override fun onLocationChanged(location: Location) {
-                    manager.removeUpdates(this)
-                    if (continuation.isActive) continuation.resume(location)
-                }
-
-                @Deprecated("Deprecated in Android")
-                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
-
-                override fun onProviderEnabled(provider: String) = Unit
-
-                override fun onProviderDisabled(provider: String) {
-                    manager.removeUpdates(this)
-                    if (continuation.isActive) continuation.resume(null)
-                }
-            }
-            manager.requestSingleUpdate(provider, listener, Looper.getMainLooper())
-            continuation.invokeOnCancellation { manager.removeUpdates(listener) }
+        val cancellationSignal = CancellationSignal()
+        LocationManagerCompat.getCurrentLocation(
+            manager,
+            provider,
+            cancellationSignal,
+            ContextCompat.getMainExecutor(context)
+        ) { location ->
+            if (continuation.isActive) continuation.resume(location)
         }
+        continuation.invokeOnCancellation { cancellationSignal.cancel() }
     }
 
     private fun Location.toGeoPoint() = GeoPoint(

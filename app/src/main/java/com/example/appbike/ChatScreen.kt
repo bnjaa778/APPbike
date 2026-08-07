@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,7 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -55,53 +56,73 @@ import com.example.appbike.ui.theme.AppTextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 private const val CHAT_POLL_INTERVAL_MS = 3_000L
 private const val CHAT_PAGE_SIZE = 200
+
+private data class ChatSyncResult(
+    val mergedMessages: List<StoredMessage>,
+    val resolvedCount: Int,
+    val resolvedVersion: Long
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     account: AccountSession?,
     initialChat: UserChat? = null,
-    onInitialChatConsumed: () -> Unit = {}
+    onInitialChatConsumed: () -> Unit = {},
+    onOpenAccount: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val chats = remember { mutableStateListOf<UserChat>() }
-    val messages = remember { mutableStateListOf<StoredMessage>() }
-    var selectedType by remember { mutableStateOf(ChatType.SOCIAL) }
-    var selectedChat by remember { mutableStateOf<UserChat?>(null) }
-    var loadingChats by remember { mutableStateOf(false) }
-    var refreshingChats by remember { mutableStateOf(false) }
-    var syncingMessages by remember { mutableStateOf(false) }
-    var messageSyncInFlight by remember { mutableStateOf(false) }
-    var sendingMessage by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    val accountKey = account?.userId.orEmpty()
+    val chats = remember(accountKey) { mutableStateListOf<UserChat>() }
+    val messages = remember(accountKey) { mutableStateListOf<StoredMessage>() }
+    var selectedType by remember(accountKey) { mutableStateOf(ChatType.SOCIAL) }
+    var selectedChat by remember(accountKey) { mutableStateOf<UserChat?>(null) }
+    var loadingChats by remember(accountKey) { mutableStateOf(false) }
+    var refreshingChats by remember(accountKey) { mutableStateOf(false) }
+    var syncingMessageChatId by remember(accountKey) { mutableStateOf<String?>(null) }
+    var sendingMessageChatId by remember(accountKey) { mutableStateOf<String?>(null) }
+    var error by remember(accountKey) { mutableStateOf<String?>(null) }
+    val chatListMutex = remember(accountKey) { Mutex() }
+    val chatOperationMutexes = remember(accountKey) { mutableMapOf<String, Mutex>() }
+
+    fun operationMutex(chatId: String): Mutex =
+        chatOperationMutexes.getOrPut(chatId) { Mutex() }
 
     suspend fun refreshChatList(session: AccountSession, initialLoad: Boolean) {
-        if (initialLoad) loadingChats = true else refreshingChats = true
-        runCatching {
-            withContext(Dispatchers.IO) {
-                RemoteConnections.loadUserChats(session.userId)
-            }
-        }.onSuccess { remote ->
-            chats.clear()
-            chats.addAll(remote)
-            LocalDataStore.saveChats(context, session.userId, remote)
-            selectedChat?.let { open ->
-                remote.firstOrNull { it.id == open.id }?.let { updated ->
-                    selectedChat = updated
-                    selectedType = updated.type
+        if (!chatListMutex.tryLock()) return
+        try {
+            if (initialLoad) loadingChats = true else refreshingChats = true
+            runSuspendCatching {
+                withContext(Dispatchers.IO) {
+                    RemoteConnections.loadUserChats(session.userId).also { remote ->
+                        LocalDataStore.saveChats(context, session.userId, remote)
+                    }
                 }
+            }.onSuccess { remote ->
+                chats.clear()
+                chats.addAll(remote)
+                selectedChat?.let { open ->
+                    remote.firstOrNull { it.id == open.id }?.let { updated ->
+                        selectedChat = updated
+                        selectedType = updated.type
+                    }
+                }
+                error = null
+            }.onFailure {
+                if (chats.isEmpty()) error = RemoteConnections.userFriendlyError(it)
             }
-            error = null
-        }.onFailure {
-            if (chats.isEmpty()) error = RemoteConnections.userFriendlyError(it)
+        } finally {
+            loadingChats = false
+            refreshingChats = false
+            chatListMutex.unlock()
         }
-        loadingChats = false
-        refreshingChats = false
     }
 
     suspend fun syncChatMessages(
@@ -110,105 +131,110 @@ fun ChatScreen(
         forceFullHistory: Boolean,
         showProgress: Boolean
     ) {
-        if (messageSyncInFlight) return
-        messageSyncInFlight = true
-        if (showProgress) syncingMessages = true
-        val local = if (selectedChat?.id == chat.id) {
-            messages.toList()
-        } else {
-            LocalDataStore.loadMessages(context, session.userId, chat.id)
+        operationMutex(chat.id).withLock {
+            if (showProgress) syncingMessageChatId = chat.id
+            try {
+                val visibleLocal = messages.toList().takeIf { selectedChat?.id == chat.id }
+                val result = runSuspendCatching {
+                    withContext(Dispatchers.IO) {
+                        val local = visibleLocal
+                            ?: LocalDataStore.loadMessages(context, session.userId, chat.id)
+                        val firstCursor = if (forceFullHistory) {
+                            ""
+                        } else {
+                            local.lastOrNull()?.id.orEmpty()
+                        }
+                        val downloaded = mutableListOf<StoredMessage>()
+                        var cursor = firstCursor
+                        var highestCount = 0
+                        var highestVersion = 0L
+                        var pageNumber = 0
+                        do {
+                            val page = RemoteConnections.loadChatMessagePage(
+                                userId = session.userId,
+                                chatId = chat.id,
+                                afterMessageId = cursor
+                            )
+                            downloaded.addAll(page.messages)
+                            highestCount = maxOf(highestCount, page.messageCount)
+                            highestVersion = maxOf(highestVersion, page.version)
+                            val nextCursor = page.messages.lastOrNull()?.id.orEmpty()
+                            val canContinue = nextCursor.isNotBlank() && nextCursor != cursor &&
+                                (page.hasMore || page.messages.size >= CHAT_PAGE_SIZE)
+                            cursor = nextCursor
+                            pageNumber += 1
+                        } while (canContinue && pageNumber < 20)
+
+                        val page = ChatMessagePage(
+                            messages = downloaded,
+                            messageCount = highestCount,
+                            version = highestVersion,
+                            hasMore = false
+                        )
+                        val merged = mergeStoredMessages(local, page.messages)
+                        val resolvedCount = maxOf(chat.messageCount, page.messageCount, merged.size)
+                        val resolvedVersion = maxOf(chat.version, page.version)
+                        LocalDataStore.saveMessages(context, session.userId, chat.id, merged)
+                        LocalDataStore.saveSync(
+                            context,
+                            session.userId,
+                            ChatSyncMetadata(
+                                chatId = chat.id,
+                                lastMessageId = merged.lastOrNull()?.id.orEmpty(),
+                                messageCount = resolvedCount,
+                                version = resolvedVersion,
+                                lastSync = System.currentTimeMillis()
+                            )
+                        )
+                        ChatSyncResult(merged, resolvedCount, resolvedVersion)
+                    }
+                }
+
+                result.onSuccess { sync ->
+                    if (selectedChat?.id == chat.id) {
+                        messages.clear()
+                        messages.addAll(sync.mergedMessages)
+                    }
+                    val latest = sync.mergedMessages.lastOrNull()
+                    val chatIndex = chats.indexOfFirst { it.id == chat.id }
+                    if (chatIndex >= 0) {
+                        chats[chatIndex] = chats[chatIndex].copy(
+                            lastMessage = latest?.content.orEmpty(),
+                            lastMessageId = latest?.id.orEmpty(),
+                            lastMessageSenderId = latest?.senderId.orEmpty(),
+                            lastMessageSenderUsername = latest?.senderUsername,
+                            messageCount = sync.resolvedCount,
+                            version = sync.resolvedVersion,
+                            updatedAt = latest?.createdAt.orEmpty()
+                        )
+                        if (selectedChat?.id == chat.id) selectedChat = chats[chatIndex]
+                    }
+                    error = null
+                }.onFailure {
+                    if (selectedChat?.id == chat.id) {
+                        error = RemoteConnections.userFriendlyError(it)
+                    }
+                }
+
+                if (result.isSuccess) {
+                    val chatsSnapshot = chats.toList()
+                    withContext(Dispatchers.IO) {
+                        LocalDataStore.saveChats(context, session.userId, chatsSnapshot)
+                    }
+                }
+            } finally {
+                if (showProgress && syncingMessageChatId == chat.id) {
+                    syncingMessageChatId = null
+                }
+            }
         }
-        val firstCursor = if (forceFullHistory) "" else local.lastOrNull()?.id.orEmpty()
-        runCatching {
-            withContext(Dispatchers.IO) {
-                val downloaded = mutableListOf<StoredMessage>()
-                var cursor = firstCursor
-                var highestCount = 0
-                var highestVersion = 0L
-                var pageNumber = 0
-                do {
-                    val page = RemoteConnections.loadChatMessagePage(
-                        userId = session.userId,
-                        chatId = chat.id,
-                        afterMessageId = cursor
-                    )
-                    downloaded.addAll(page.messages)
-                    highestCount = maxOf(highestCount, page.messageCount)
-                    highestVersion = maxOf(highestVersion, page.version)
-                    val nextCursor = page.messages.lastOrNull()?.id.orEmpty()
-                    val canContinue = nextCursor.isNotBlank() && nextCursor != cursor &&
-                        (page.hasMore || page.messages.size >= CHAT_PAGE_SIZE)
-                    cursor = nextCursor
-                    pageNumber += 1
-                } while (canContinue && pageNumber < 20)
-                ChatMessagePage(
-                    messages = downloaded,
-                    messageCount = highestCount,
-                    version = highestVersion,
-                    hasMore = false
-                )
-            }
-        }.onSuccess { page ->
-            val normalized = page.messages.map { message ->
-                message.copy(chatId = message.chatId.ifBlank { chat.id })
-            }
-            val merged = mergeStoredMessages(local, normalized)
-            if (selectedChat?.id == chat.id) {
-                messages.clear()
-                messages.addAll(merged)
-            }
-            LocalDataStore.saveMessages(context, session.userId, chat.id, merged)
-            val resolvedCount = maxOf(chat.messageCount, page.messageCount, merged.size)
-            val resolvedVersion = maxOf(chat.version, page.version)
-            LocalDataStore.saveSync(
-                context,
-                session.userId,
-                ChatSyncMetadata(
-                    chatId = chat.id,
-                    lastMessageId = merged.lastOrNull()?.id.orEmpty(),
-                    messageCount = resolvedCount,
-                    version = resolvedVersion,
-                    lastSync = System.currentTimeMillis()
-                )
-            )
-            val chatIndex = chats.indexOfFirst { it.id == chat.id }
-            if (chatIndex >= 0) {
-                chats[chatIndex] = chats[chatIndex].copy(
-                    lastMessage = merged.lastOrNull()?.content.orEmpty(),
-                    lastMessageId = merged.lastOrNull()?.id.orEmpty(),
-                    lastMessageSenderId = merged.lastOrNull()?.senderId.orEmpty(),
-                    lastMessageSenderUsername = merged.lastOrNull()?.senderUsername,
-                    messageCount = resolvedCount,
-                    version = resolvedVersion,
-                    updatedAt = merged.lastOrNull()?.createdAt.orEmpty()
-                )
-                if (selectedChat?.id == chat.id) selectedChat = chats[chatIndex]
-                LocalDataStore.saveChats(context, session.userId, chats)
-            }
-            error = null
-        }.onFailure {
-            error = RemoteConnections.userFriendlyError(it)
-        }
-        syncingMessages = false
-        messageSyncInFlight = false
     }
 
     fun openChat(chat: UserChat) {
-        val session = account ?: return
+        if (account == null) return
         selectedChat = chat
         selectedType = chat.type
         messages.clear()
-        val local = LocalDataStore.loadMessages(context, session.userId, chat.id)
-        messages.addAll(local)
-        scope.launch {
-            // A full sync on open repairs gaps left by an older incremental cache.
-            syncChatMessages(
-                session = session,
-                chat = chat,
-                forceFullHistory = true,
-                showProgress = local.isEmpty()
-            )
-        }
     }
 
     LaunchedEffect(account?.userId) {
@@ -217,7 +243,9 @@ fun ChatScreen(
         selectedChat = null
         error = null
         val session = account ?: return@LaunchedEffect
-        val local = LocalDataStore.loadChats(context, session.userId)
+        val local = withContext(Dispatchers.IO) {
+            LocalDataStore.loadChats(context, session.userId)
+        }
         chats.addAll(local)
         refreshChatList(session, initialLoad = true)
     }
@@ -227,7 +255,10 @@ fun ChatScreen(
         val target = initialChat ?: return@LaunchedEffect
         if (chats.none { it.id == target.id }) {
             chats.add(0, target)
-            LocalDataStore.saveChats(context, session.userId, chats)
+            val chatsSnapshot = chats.toList()
+            withContext(Dispatchers.IO) {
+                LocalDataStore.saveChats(context, session.userId, chatsSnapshot)
+            }
         }
         openChat(target)
         onInitialChatConsumed()
@@ -236,6 +267,20 @@ fun ChatScreen(
     LaunchedEffect(account?.userId, selectedChat?.id) {
         val session = account ?: return@LaunchedEffect
         val activeChat = selectedChat ?: return@LaunchedEffect
+        val local = withContext(Dispatchers.IO) {
+            LocalDataStore.loadMessages(context, session.userId, activeChat.id)
+        }
+        if (selectedChat?.id != activeChat.id) return@LaunchedEffect
+        messages.clear()
+        messages.addAll(local)
+        // Opening a conversation always repairs historical cache gaps. This effect is
+        // cancelled when the user changes chats, so an older screen cannot own the UI.
+        syncChatMessages(
+            session = session,
+            chat = activeChat,
+            forceFullHistory = true,
+            showProgress = local.isEmpty()
+        )
         while (true) {
             delay(CHAT_POLL_INTERVAL_MS)
             syncChatMessages(
@@ -249,12 +294,19 @@ fun ChatScreen(
 
     if (account == null) {
         PremiumScreenBackground(PremiumGlowStyle.Chat) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                EmptyState(
-                    title = "Inicia sesión para ver tus conversaciones",
-                    description = "Tus mensajes de juntas y Marketplace se sincronizan al entrar con tu cuenta.",
-                    modifier = Modifier.padding(AppDimens.Space4)
-                )
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(AppDimens.Space4),
+                verticalArrangement = Arrangement.Center
+            ) {
+                item {
+                    EmptyState(
+                        title = "Inicia sesión para ver tus conversaciones",
+                        description = "Tus mensajes de juntas y Marketplace se sincronizan al entrar con tu cuenta.",
+                        actionLabel = "Iniciar sesión",
+                        onAction = onOpenAccount
+                    )
+                }
             }
         }
         return
@@ -284,18 +336,27 @@ fun ChatScreen(
                         contentAlignment = Alignment.Center
                     ) { LoadingState("Cargando conversaciones...") }
 
-                    visibleChats.isEmpty() -> Box(
-                        Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
+                    visibleChats.isEmpty() -> {
                         if (error == null) {
-                            EmptyState(
-                                title = "No tienes chats en esta categoría",
-                                description = "Cuando contactes publicaciones o juntas, aparecerán aquí.",
-                                modifier = Modifier.padding(AppDimens.Space4)
-                            )
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(AppDimens.Space4),
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                item {
+                                    EmptyState(
+                                        title = "No tienes chats en esta categoría",
+                                        description = "Cuando contactes publicaciones o juntas, aparecerán aquí."
+                                    )
+                                }
+                            }
                         } else {
-                            ErrorBanner(error ?: "")
+                            Box(
+                                Modifier.fillMaxSize().padding(AppDimens.Space4),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                ErrorBanner(error ?: "")
+                            }
                         }
                     }
 
@@ -315,8 +376,8 @@ fun ChatScreen(
                 account = account,
                 chat = activeChat,
                 messages = messages,
-                loading = syncingMessages,
-                sending = sendingMessage,
+                loading = syncingMessageChatId == activeChat.id,
+                sending = sendingMessageChatId == activeChat.id,
                 error = error,
                 onBack = {
                     selectedChat = null
@@ -333,62 +394,103 @@ fun ChatScreen(
                         )
                     }
                 },
-                onSend = { content ->
+                onSend = { content, onSent ->
+                    if (sendingMessageChatId != null) return@ConversationView
+                    sendingMessageChatId = activeChat.id
                     scope.launch {
-                        sendingMessage = true
-                        runCatching {
-                            withContext(Dispatchers.IO) {
-                                RemoteConnections.sendChatMessage(
-                                    account.userId,
-                                    activeChat.id,
-                                    content
-                                )
-                            }
-                        }.onSuccess { response ->
-                            val sent = response.copy(
-                                chatId = response.chatId.ifBlank { activeChat.id },
-                                senderId = response.senderId.ifBlank { account.userId },
-                                senderUsername = response.senderUsername ?: account.username
-                            )
-                            val merged = mergeStoredMessages(messages.toList(), listOf(sent))
-                            messages.clear()
-                            messages.addAll(merged)
-                            val chatIndex = chats.indexOfFirst { it.id == activeChat.id }
-                            if (chatIndex >= 0) {
-                                chats[chatIndex] = chats[chatIndex].copy(
-                                    lastMessage = sent.content,
-                                    lastMessageId = sent.id,
-                                    lastMessageSenderId = sent.senderId,
-                                    lastMessageSenderUsername = sent.senderUsername,
-                                    messageCount = maxOf(
-                                        chats[chatIndex].messageCount + 1,
+                        try {
+                            operationMutex(activeChat.id).withLock {
+                                val visibleLocal = messages.toList().takeIf {
+                                    selectedChat?.id == activeChat.id
+                                }
+                                val local = visibleLocal ?: withContext(Dispatchers.IO) {
+                                    LocalDataStore.loadMessages(
+                                        context,
+                                        account.userId,
+                                        activeChat.id
+                                    )
+                                }
+                                val result = runSuspendCatching {
+                                    withContext(Dispatchers.IO) {
+                                        RemoteConnections.sendChatMessage(
+                                            account.userId,
+                                            activeChat.id,
+                                            content
+                                        )
+                                    }
+                                }
+                                val failure = result.exceptionOrNull()
+                                if (failure != null) {
+                                    if (selectedChat?.id == activeChat.id) {
+                                        error = RemoteConnections.userFriendlyError(failure)
+                                    }
+                                } else {
+                                    val response = result.getOrThrow()
+                                    val sent = response.copy(
+                                        chatId = response.chatId.ifBlank { activeChat.id },
+                                        senderId = response.senderId.ifBlank { account.userId },
+                                        senderUsername = response.senderUsername ?: account.username
+                                    )
+                                    val merged = mergeStoredMessages(local, listOf(sent))
+                                    if (selectedChat?.id == activeChat.id) {
+                                        messages.clear()
+                                        messages.addAll(merged)
+                                    }
+                                    val chatIndex = chats.indexOfFirst { it.id == activeChat.id }
+                                    val currentChat = chats.getOrNull(chatIndex) ?: activeChat
+                                    val resolvedCount = maxOf(
+                                        currentChat.messageCount + 1,
                                         merged.size
-                                    ),
-                                    updatedAt = sent.createdAt
-                                )
-                                selectedChat = chats[chatIndex]
-                                LocalDataStore.saveChats(context, account.userId, chats)
+                                    )
+                                    if (chatIndex >= 0) {
+                                        chats[chatIndex] = currentChat.copy(
+                                            lastMessage = sent.content,
+                                            lastMessageId = sent.id,
+                                            lastMessageSenderId = sent.senderId,
+                                            lastMessageSenderUsername = sent.senderUsername,
+                                            messageCount = resolvedCount,
+                                            updatedAt = sent.createdAt
+                                        )
+                                        if (selectedChat?.id == activeChat.id) {
+                                            selectedChat = chats[chatIndex]
+                                        }
+                                    }
+                                    val chatsSnapshot = chats.toList()
+                                    withContext(Dispatchers.IO) {
+                                        LocalDataStore.saveChats(
+                                            context,
+                                            account.userId,
+                                            chatsSnapshot
+                                        )
+                                        LocalDataStore.saveMessages(
+                                            context,
+                                            account.userId,
+                                            activeChat.id,
+                                            merged
+                                        )
+                                        LocalDataStore.saveSync(
+                                            context,
+                                            account.userId,
+                                            ChatSyncMetadata(
+                                                chatId = activeChat.id,
+                                                lastMessageId = sent.id,
+                                                messageCount = resolvedCount,
+                                                version = currentChat.version,
+                                                lastSync = System.currentTimeMillis()
+                                            )
+                                        )
+                                    }
+                                    if (selectedChat?.id == activeChat.id) {
+                                        error = null
+                                        onSent()
+                                    }
+                                }
                             }
-                            LocalDataStore.saveMessages(
-                                context,
-                                account.userId,
-                                activeChat.id,
-                                merged
-                            )
-                            LocalDataStore.saveSync(
-                                context,
-                                account.userId,
-                                ChatSyncMetadata(
-                                    chatId = activeChat.id,
-                                    lastMessageId = sent.id,
-                                    messageCount = maxOf(activeChat.messageCount + 1, merged.size),
-                                    version = activeChat.version,
-                                    lastSync = System.currentTimeMillis()
-                                )
-                            )
-                            error = null
-                        }.onFailure { error = RemoteConnections.userFriendlyError(it) }
-                        sendingMessage = false
+                        } finally {
+                            if (sendingMessageChatId == activeChat.id) {
+                                sendingMessageChatId = null
+                            }
+                        }
                     }
                 }
             )
@@ -399,7 +501,7 @@ fun ChatScreen(
 
 @Composable
 private fun ChatTypeTabs(selected: ChatType, onSelect: (ChatType) -> Unit) {
-    TabRow(
+    PrimaryTabRow(
         selectedTabIndex = if (selected == ChatType.SOCIAL) 0 else 1,
         containerColor = AppSurface,
         contentColor = AppTextPrimary
@@ -467,7 +569,7 @@ private fun ConversationView(
     error: String?,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
-    onSend: (String) -> Unit
+    onSend: (String, () -> Unit) -> Unit
 ) {
     var draft by remember(chat.id) { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -482,7 +584,7 @@ private fun ConversationView(
             horizontalArrangement = Arrangement.spacedBy(AppDimens.Space2),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack) {
+            IconButton(onClick = onBack, enabled = !sending) {
                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Volver")
             }
             Text(
@@ -568,18 +670,23 @@ private fun ConversationView(
         ) {
             OutlinedTextField(
                 value = draft,
-                onValueChange = { draft = it },
+                onValueChange = { draft = it.take(2_000) },
                 modifier = Modifier
-                    .weight(1f),
+                    .weight(1f)
+                    .appBikeTextFieldGlow(),
                 placeholder = { Text("Mensaje") },
+                enabled = !sending,
+                maxLines = 4,
                 shape = RoundedCornerShape(AppDimens.RadiusMedium),
                 colors = appBikeTextFieldColors()
             )
             Button(
                 enabled = draft.isNotBlank() && !sending,
                 onClick = {
-                    onSend(draft)
-                    draft = ""
+                    val submittedDraft = draft.trim()
+                    onSend(submittedDraft) {
+                        if (draft.trim() == submittedDraft) draft = ""
+                    }
                 }
             ) {
                 if (sending) {

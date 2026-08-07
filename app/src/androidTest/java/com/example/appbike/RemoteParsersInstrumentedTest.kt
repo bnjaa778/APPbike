@@ -11,6 +11,18 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class RemoteParsersInstrumentedTest {
     @Test
+    fun bikeParserDoesNotExposeInternalPhotoPath() {
+        val bike = RemoteConnections.bikeFromJson(
+            JSONObject()
+                .put("id", 42)
+                .put("bike_custom_name", "Ruta")
+                .put("photo_path", "BikesPhotos/PersonalBikesPhotos/42.jpg")
+        )
+
+        assertEquals("", bike.imageUri)
+    }
+
+    @Test
     fun marketplaceParserPreservesCurrencyDistanceAndCoverPhoto() {
         val item = JSONObject()
             .put("id", "LAS-abc")
@@ -31,6 +43,42 @@ class RemoteParsersInstrumentedTest {
         assertEquals("ciclista.osorno", post.createdByUsername)
         assertEquals(2.5, post.distanceKm!!, 0.001)
         assertEquals("appbike-market-photo://LAS-abc/cover.webp", post.images.single())
+    }
+
+    @Test
+    fun marketplaceParserIgnoresInternalPhotoObjectPath() {
+        val post = RemoteConnections.marketplaceFromJson(
+            JSONObject()
+                .put("id", "LAS-private-photo")
+                .put("title", "Casco")
+                .put(
+                    "photos",
+                    JSONArray(
+                        listOf(
+                            JSONObject().put(
+                                "path",
+                                "/srv/internal-auth/public/AppBikeInternal/photo.jpg"
+                            )
+                        )
+                    )
+                )
+        )
+
+        assertTrue(post.images.isEmpty())
+    }
+
+    @Test
+    fun meetupParserSeparatesEncodedDateFromVisibleDescription() {
+        val meetup = RemoteConnections.meetupFromJson(
+            JSONObject()
+                .put("id", "LAS-meetup")
+                .put("title", "Salida costera")
+                .put("description", "Fecha y hora: 10 de agosto, 18:00\nRuta costera.")
+                .put("location", "LAS:-41.47,-72.94|Puerto Montt")
+        )
+
+        assertEquals("10 de agosto, 18:00", meetup.dateTime)
+        assertEquals("Ruta costera.", meetup.description)
     }
 
     @Test

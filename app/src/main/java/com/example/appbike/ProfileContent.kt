@@ -42,6 +42,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -58,35 +59,51 @@ internal fun ProfileContentSection(account: AccountSession) {
     val scope = rememberCoroutineScope()
     val publications = remember(account.userId) { mutableStateListOf<ProductPublication>() }
     val meetups = remember(account.userId) { mutableStateListOf<MeetupEvent>() }
-    var publicationStatus by remember { mutableStateOf("activa") }
-    var meetupStatus by remember { mutableStateOf("activa") }
-    var selectedPublication by remember { mutableStateOf<ProductPublication?>(null) }
-    var selectedMeetup by remember { mutableStateOf<MeetupEvent?>(null) }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var publicationStatus by remember(account.userId) { mutableStateOf("activa") }
+    var meetupStatus by remember(account.userId) { mutableStateOf("activa") }
+    var selectedPublication by remember(account.userId) {
+        mutableStateOf<ProductPublication?>(null)
+    }
+    var selectedMeetup by remember(account.userId) { mutableStateOf<MeetupEvent?>(null) }
+    var loading by remember(account.userId) { mutableStateOf(false) }
+    var error by remember(account.userId) { mutableStateOf<String?>(null) }
 
-    fun reload() {
-        scope.launch {
+    suspend fun reload() {
+        try {
             loading = true
             error = null
             val center = LocalDataStore.loadMarketplaceLocation(context)
                 ?: LocalDataStore.loadLocation(context)
                 ?: GeoPoint(-33.4489, -70.6693, "Santiago, Chile", countryCode = "CL")
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val ownPublications = RemoteConnections.loadOwnMarketplacePosts(
-                        account.userId,
-                        center
-                    )
-                    val ownMeetups = RemoteConnections.loadOwnMeetups(account.userId, center)
-                    ownPublications to ownMeetups
+            val (publicationsResult, meetupsResult) = withContext(Dispatchers.IO) {
+                val publicationsDeferred = async {
+                    runSuspendCatching {
+                        RemoteConnections.loadOwnMarketplacePosts(account.userId, center)
+                    }
                 }
-            }.onSuccess { (ownPublications, ownMeetups) ->
+                val meetupsDeferred = async {
+                    runSuspendCatching {
+                        RemoteConnections.loadOwnMeetups(account.userId, center)
+                    }
+                }
+                publicationsDeferred.await() to meetupsDeferred.await()
+            }
+            publicationsResult.onSuccess { ownPublications ->
                 publications.clear()
                 publications.addAll(ownPublications)
+            }
+            meetupsResult.onSuccess { ownMeetups ->
                 meetups.clear()
                 meetups.addAll(ownMeetups)
-            }.onFailure { error = RemoteConnections.userFriendlyError(it) }
+            }
+            error = listOfNotNull(
+                publicationsResult.exceptionOrNull(),
+                meetupsResult.exceptionOrNull()
+            ).map(RemoteConnections::userFriendlyError)
+                .distinct()
+                .joinToString("\n")
+                .takeIf(String::isNotBlank)
+        } finally {
             loading = false
         }
     }
@@ -100,7 +117,12 @@ internal fun ProfileContentSection(account: AccountSession) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         if (loading) CircularProgressIndicator()
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        error?.let {
+            ErrorBanner(it)
+            TextButton(onClick = { scope.launch { reload() } }, enabled = !loading) {
+                Text("Reintentar carga de actividad")
+            }
+        }
 
         Text("Publicaciones", fontWeight = FontWeight.Bold)
         Row(
@@ -181,7 +203,7 @@ internal fun ProfileContentSection(account: AccountSession) {
             onDismiss = { selectedPublication = null },
             onChanged = {
                 selectedPublication = null
-                reload()
+                scope.launch { reload() }
             }
         )
     }
@@ -192,7 +214,7 @@ internal fun ProfileContentSection(account: AccountSession) {
             onDismiss = { selectedMeetup = null },
             onChanged = {
                 selectedMeetup = null
-                reload()
+                scope.launch { reload() }
             }
         )
     }
@@ -240,6 +262,7 @@ private fun OwnPublicationDialog(
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
+    val publicationCurrency = marketplaceCurrency(publication.currencyCode)
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching {
@@ -250,7 +273,7 @@ private fun OwnPublicationDialog(
             }
             scope.launch {
                 loading = true
-                runCatching {
+                runSuspendCatching {
                     withContext(Dispatchers.IO) {
                         RemoteConnections.uploadMarketplacePhoto(
                             context, account.userId, publication.id, uri.toString()
@@ -267,7 +290,7 @@ private fun OwnPublicationDialog(
         scope.launch {
             loading = true
             error = null
-            runCatching { withContext(Dispatchers.IO) { action() } }
+            runSuspendCatching { withContext(Dispatchers.IO) { action() } }
                 .onSuccess { onChanged() }
                 .onFailure { error = RemoteConnections.userFriendlyError(it) }
             loading = false
@@ -283,6 +306,7 @@ private fun OwnPublicationDialog(
                     OutlinedTextField(
                         title,
                         { title = it },
+                        enabled = !loading,
                         modifier = Modifier
                             .fillMaxWidth()
                             .appBikeTextFieldGlow(),
@@ -293,6 +317,7 @@ private fun OwnPublicationDialog(
                     OutlinedTextField(
                         description,
                         { description = it },
+                        enabled = !loading,
                         modifier = Modifier
                             .fillMaxWidth()
                             .appBikeTextFieldGlow(),
@@ -304,17 +329,19 @@ private fun OwnPublicationDialog(
                     OutlinedTextField(
                         price,
                         { price = normalizeWholeUnitInput(it) },
+                        enabled = !loading,
                         modifier = Modifier
                             .fillMaxWidth()
                             .appBikeTextFieldGlow(),
                         label = { Text("Precio (${publication.currencyCode})") },
-                        prefix = { Text("$") },
+                        prefix = { Text(publicationCurrency.symbol) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         shape = RoundedCornerShape(14.dp),
                         colors = appBikeTextFieldColors()
                     )
                     ProductStatusSelector(
                         selectedStatus = productStatus,
+                        enabled = !loading,
                         onStatusSelected = { productStatus = it }
                     )
                 } else {
@@ -356,7 +383,8 @@ private fun OwnPublicationDialog(
         confirmButton = {
             if (editing) {
                 Button(
-                    enabled = title.isNotBlank() && description.isNotBlank() && price.isNotBlank(),
+                    enabled = !loading && title.isNotBlank() && description.isNotBlank() &&
+                        parseMarketplaceWholeUnitPrice(price) != null,
                     onClick = {
                         runAction {
                             RemoteConnections.updateMarketplacePost(
@@ -372,7 +400,7 @@ private fun OwnPublicationDialog(
                     }
                 ) { Text("Guardar") }
             } else {
-                TextButton(onClick = { editing = true }) {
+                TextButton(enabled = !loading, onClick = { editing = true }) {
                     Icon(Icons.Outlined.Edit, contentDescription = null)
                     Text("Editar")
                 }
@@ -389,7 +417,10 @@ private fun OwnPublicationDialog(
                 TextButton(enabled = !loading, onClick = { confirmDelete = true }) {
                     Icon(Icons.Outlined.DeleteOutline, contentDescription = "Eliminar")
                 }
-                TextButton(onClick = if (editing) ({ editing = false }) else onDismiss) {
+                TextButton(
+                    enabled = !loading,
+                    onClick = if (editing) ({ editing = false }) else onDismiss
+                ) {
                     Text(if (editing) "Cancelar" else "Cerrar")
                 }
             }
@@ -428,7 +459,7 @@ private fun OwnMeetupDialog(
         scope.launch {
             loading = true
             error = null
-            runCatching { withContext(Dispatchers.IO) { action() } }
+            runSuspendCatching { withContext(Dispatchers.IO) { action() } }
                 .onSuccess { onChanged() }
                 .onFailure { error = RemoteConnections.userFriendlyError(it) }
             loading = false
@@ -460,6 +491,7 @@ private fun OwnMeetupDialog(
                     OutlinedTextField(
                         title,
                         { title = it },
+                        enabled = !loading,
                         modifier = Modifier
                             .fillMaxWidth()
                             .appBikeTextFieldGlow(),
@@ -470,6 +502,7 @@ private fun OwnMeetupDialog(
                     OutlinedTextField(
                         description,
                         { description = it },
+                        enabled = !loading,
                         modifier = Modifier
                             .fillMaxWidth()
                             .appBikeTextFieldGlow(),
@@ -501,7 +534,7 @@ private fun OwnMeetupDialog(
         confirmButton = {
             if (editing) {
                 Button(
-                    enabled = title.isNotBlank() && description.isNotBlank(),
+                    enabled = !loading && title.isNotBlank() && description.isNotBlank(),
                     onClick = {
                         runAction {
                             RemoteConnections.updateMeetupEvent(
@@ -512,7 +545,7 @@ private fun OwnMeetupDialog(
                     }
                 ) { Text("Guardar") }
             } else {
-                TextButton(onClick = { editing = true }) {
+                TextButton(enabled = !loading, onClick = { editing = true }) {
                     Icon(Icons.Outlined.Edit, contentDescription = null)
                     Text("Editar")
                 }
@@ -529,7 +562,10 @@ private fun OwnMeetupDialog(
                 TextButton(enabled = !loading, onClick = { confirmDelete = true }) {
                     Icon(Icons.Outlined.DeleteOutline, contentDescription = "Eliminar")
                 }
-                TextButton(onClick = if (editing) ({ editing = false }) else onDismiss) {
+                TextButton(
+                    enabled = !loading,
+                    onClick = if (editing) ({ editing = false }) else onDismiss
+                ) {
                     Text(if (editing) "Cancelar" else "Cerrar")
                 }
             }

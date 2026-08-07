@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import androidx.core.content.edit
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -31,15 +32,14 @@ internal object SecureTokenStore {
             cipher.iv.copyInto(output, 1)
             encrypted.copyInto(output, 1 + cipher.iv.size)
         }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putString(TOKEN, Base64.encodeToString(packed, Base64.NO_WRAP))
-            .apply()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+            putString(TOKEN, Base64.encodeToString(packed, Base64.NO_WRAP))
+        }
     }
 
     fun load(context: Context): String {
         val encoded = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(TOKEN, null) ?: return ""
+            .all[TOKEN] as? String ?: return ""
         return runCatching {
             val packed = Base64.decode(encoded, Base64.NO_WRAP)
             val ivSize = packed.first().toInt() and 0xFF
@@ -57,10 +57,9 @@ internal object SecureTokenStore {
     }
 
     fun clear(context: Context) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .remove(TOKEN)
-            .apply()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+            remove(TOKEN)
+        }
     }
 
     private fun getOrCreateKey(): SecretKey {

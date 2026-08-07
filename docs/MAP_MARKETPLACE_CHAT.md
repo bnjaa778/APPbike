@@ -17,22 +17,49 @@
 - `docs/LOCATION_BACKEND_HANDOFF.md`: contrato detallado para API externa,
   API interna, tablas, consultas geográficas y datos iniciales.
 
+La navegación raíz compone cabecera, contenido y barra inferior como hermanos
+directos. El contenido central se recorta para contener MapLibre y los fondos
+decorativos, mientras las barras persistentes conservan prioridad visual. En
+horizontal, la cabecera se compacta en una línea y la navegación usa 56 dp con
+iconos sin etiqueta visual, pero mantiene la semántica completa de los cuatro
+destinos.
+
 ## Mapa y juntas regionales
 
-La pantalla mantiene MapLibre Native OpenGL con el estilo Liberty de
-OpenFreeMap. El marcador verde representa la ubicación local guardada y no se
+El `MapView` expone una descripcion en espanol con la cantidad de juntas
+cercanas visibles. Una prueba instrumentada con estilo offline agrega una junta
+despues de que el mapa queda listo y consulta la capa renderizada; esto protege
+la actualizacion tardia de la fuente GeoJSON. En la validacion real del
+2026-08-06, Osorno mostro el marcador azul, el detalle remoto y su foto Base64.
+
+La pantalla mantiene MapLibre Native OpenGL 13.4.1 con el estilo Liberty de
+OpenFreeMap. La migracion API 37 se valido con la regresion de fuente tardia y
+un render real del mapa tanto en Android 16 como en el AVD `APPbike_API_37`
+Android 17, sin error de carga nativa. El
+marcador verde representa la ubicación local guardada y no se
 mueve al desplazar el mapa. Las juntas con coordenadas válidas usan marcador
 azul y abren su detalle al tocarlas.
 
+Para conservar acceso por teclado alrededor del `AndroidView`, el buscador, la
+fila de ubicación y la acción Crear junta se componen antes del mapa y se dibujan
+por encima con `zIndex(1f)`. El recorrido comprobado mantiene Cuenta, buscador,
+acción Buscar, ubicación actual, Crear junta, mapa y destinos disponibles sin
+perder el campo de texto al atravesar MapLibre.
+
 El onboarding y la corrección de ubicación no cambian: permisos Android en el
 primer ingreso, confirmación antes de persistir y sugerencias en vivo. La capa
-remota intenta primero `location.search`/`location.reverse`; mientras esas
-acciones no existan usa `android.location.Geocoder` y Nominatim como respaldo
-temporal con cache, rate limit y timeout.
+remota intenta primero `location.search`/`location.reverse`. La búsqueda remota
+ya devuelve lugares normalizados, pero la resolución inversa aún puede responder
+`unknown_region`; `android.location.Geocoder` y Nominatim permanecen como
+respaldo temporal con cache, rate limit y timeout.
 El diálogo muestra hasta ocho ubicaciones recientes antes de escribir. El
 historial es compartido para ofrecer accesos rápidos, pero seleccionar un lugar
 solo actualiza la ubicación activa de Mapas o de Marketplace según el origen
 del diálogo.
+
+Cada confirmación de ubicación tiene un identificador monotónico adicional. Si
+`location.resolve` termina después de que el usuario eligió otro lugar, su
+resultado se descarta y no puede restaurar la selección anterior.
 
 El selector manual no usa una ventana `AlertDialog`: es un overlay Compose
 dentro de la misma pantalla para que MapLibre, el teclado y la selección no
@@ -43,6 +70,11 @@ de 3 s; si no responde o devuelve vacío, la misma búsqueda en vivo usa
 automáticamente Nominatim con límite de 8 s, sin esperar Enter. Al tocar una
 sugerencia se oculta el teclado y se libera el foco antes de guardar y retirar
 el overlay.
+
+Cuando existe una ubicación previa, el primer foco limpia su etiqueta antes de
+aceptar escritura. Así una búsqueda nueva reemplaza el valor anterior en vez de
+insertarse dentro de él; la ubicación previa continúa accesible en la lista de
+recientes y no se modifica hasta seleccionar una sugerencia.
 
 La API de comunidad ya está desplegada y todas sus acciones se envían por
 `POST` JSON a `AppBikeExternal.php`:
@@ -62,6 +94,23 @@ la app refresca la lista y esa junta deja de mostrarse. El contrato para listar
 juntas `pasada` se conserva para el futuro historial del perfil del creador,
 donde podrá consultar sus juntas anteriores y sus detalles.
 
+Cada recarga y apertura de detalle lleva un identificador monotónico. Si cambia
+la ubicación, la búsqueda o el marcador antes de terminar una respuesta, el
+resultado antiguo se descarta y no puede sobrescribir la pantalla vigente. Al
+crear, Android geocodifica el punto exacto elegido; ante fallo conserva las
+coordenadas y usa la región de la ubicación confirmada como respaldo. El botón
+se bloquea durante los dos pasos. Si el JSON creó la junta pero falló `foto`, se
+informa un éxito parcial, se cierra el formulario y se refresca para no duplicar.
+
+Crear una junta o contactar a su organizador requiere sesion. Sin cuenta activa,
+ambas acciones abren Cuenta mediante la navegacion raiz; los CTA publicos no se
+deshabilitan cuando su texto promete iniciar sesion.
+
+Mientras el backend comunitario no expone un campo de fecha propio, Android
+codifica `Fecha y hora: <valor>` al inicio de `description`. El parser retira esa
+linea del texto visible y la conserva en `MeetupEvent.dateTime`; editar vuelve a
+codificarla exactamente una vez para no duplicarla ni perderla.
+
 Para conservar coordenadas dentro del campo de backend existente, las juntas
 creadas por Android usan:
 
@@ -80,11 +129,26 @@ integración actual usa el valor de backend `LAS`.
 
 ## Marketplace regional
 
+Crear una publicacion o contactar a un vendedor abre Cuenta si no existe sesion.
+El recorrido real del 2026-08-06 cargo la grilla y el detalle de publicaciones
+activas de Puerto Montt; las tarjetas conservan placeholder cuando el listado no
+entrega un `photo_id` de portada util.
+En el detalle, ese estado sin portada ocupa 180 dp en lugar del hero de 340 dp;
+cuando existe una fotografia se conserva la altura protagonista completa.
+
 Marketplace público solicita exclusivamente `publication_status=activa`,
 mantiene búsqueda local sobre la respuesta y filtra a 40 km cuando el registro
 contiene coordenadas codificadas. Los filtros `activa`, `pausada`, `vendida` y
 `en_revision` se retiran de esta vista, pero sus acciones remotas se conservan
 para la futura administración de publicaciones propias desde el perfil.
+La cabecera raíz de marca/perfil conserva prioridad de dibujo sobre el fondo de
+Marketplace y permanece visible durante carga, listado y estado vacío.
+El fondo decorativo se recorta a los límites del contenido. Con fuente Android
+al 200 %, búsqueda, ubicación, moneda y navegación conservan jerarquía; los
+nombres largos se eliden sin reducir el tamaño de texto configurado.
+La misma prioridad se verificó navegando Mapas → Bicicletas → Marketplace →
+Chat en horizontal; el cambio de destino no debe ocultar ni retrasar el repintado
+de la marca o del acceso a Cuenta.
 
 Al entrar a la pantalla o ejecutar una búsqueda se muestra un indicador circular
 superpuesto durante un mínimo de 450 ms. Cada recarga tiene un identificador;
@@ -101,15 +165,17 @@ forma parte del flujo.
 La ubicación de Marketplace se persiste en `marketplace_location`. En el primer
 uso toma una copia de `selected_location`, si existe; luego el botón de ubicación
 de Marketplace puede cambiarla sin modificar el mapa de Juntas, y viceversa.
+La resolución remota también comprueba el identificador de la elección vigente
+antes de persistir país, área o moneda derivados.
 
 El formulario usa un selector cerrado para `product_status`: `nuevo`, `usado`
 o `reacondicionado`. El precio conserva únicamente dígitos, muestra un prefijo
 monetario no editable y agrupa miles según la moneda derivada de la ubicación.
 Así, `10.000` se envía como el entero `10000`. La UI muestra, entre otras
 equivalencias, `$ ... CLP` para Chile y `$ ... ARS` para Argentina. Android ya
-envía y parsea `currency`; el backend desplegado todavía no lo conserva. Los
-registros antiguos usan CLP como fallback y la migración requerida está en el
-informe de backend.
+envía y parsea `currency`; la respuesta observada el 2026-08-06 ya conserva el
+campo. Los registros antiguos o respuestas parciales usan la moneda derivada de
+la ubicación de creación como fallback.
 
 Acciones usadas:
 
@@ -127,10 +193,17 @@ La creación es obligatoriamente de dos pasos: primero JSON
 propietario cambiar estado y agregar más fotos. Cada operación recarga detalle
 y listado.
 
-El listado desplegado todavía devuelve `publications` sin fotos. Android no hace
-consultas N+1: espera `photo_id`/`cover_photo_id` en cada elemento y muestra un
-placeholder mientras el backend no entregue la portada. El detalle devuelve
-`publication` y su array `photos`. Las referencias internas conservan el ID padre:
+El formulario bloquea controles mientras crea y evita el doble envío. Si el
+primer paso tuvo éxito y solo falla la foto, muestra que la publicación existe y
+refresca sin repetirla. Recargas y detalles descartan respuestas antiguas; los
+listados sin ID se ignoran y un fallo con lista vacía ofrece `Reintentar` en vez
+de simular un resultado legítimamente vacío.
+
+Android no hace consultas N+1: espera `photo_id`/`cover_photo_id` en cada
+elemento y muestra un placeholder cuando la publicación no tiene portada. La
+muestra del 2026-08-06 incluyó la clave `photo_id`, aunque sin un valor útil. El
+detalle devuelve `publication` y su array `photos`. Las referencias internas
+conservan el ID padre:
 
 ```text
 appbike-market-photo://<publication_id>/<photo_id>
@@ -138,7 +211,15 @@ appbike-junta-photo://<junta_id>/<photo_id>
 ```
 
 No exponer `photo_folder_path` ni `file_path` como URL pública. La descarga usa
-`content_base64` desde la acción `photo.get` correspondiente.
+`content_base64` desde la acción `photo.get` correspondiente. Android limita
+subidas/descargas a 20 MB, muestrea bitmaps grandes y respeta EXIF en archivos
+locales; el backend puede aplicar su límite más estricto.
+
+La compatibilidad legacy no acepta cualquier `path`: Android descarta rutas de
+servidor (`PersonalBikesPhotos`, `AppBikeInternal`, `/srv`, `/var`, unidades
+Windows), traversal, `file:`, HTTP y hosts externos. Solo una ruta pública
+relativa al API o HTTPS bajo Zizzio puede convertirse en URL. Si se rechaza,
+queda el placeholder; nunca se intenta “arreglar” una ruta interna.
 
 ## Contenido propio en Cuenta
 
@@ -148,8 +229,19 @@ detalle permite editar, mover estado, completar, agregar fotos y eliminar. La
 carga intenta `marketplace.mine.list` y `junta.mine.list`; mientras no existan,
 consulta los listados de la región activa y filtra estrictamente por `user_id`.
 El fallback no reemplaza el requisito multirregional del backend.
+Cuando la acción privada responde directamente, cada elemento debe traer el
+`user_id` exacto de la cuenta activa. Android rechaza la lista completa ante un
+propietario ausente o ajeno para no ocultar una violación del contrato. Las
+creaciones comprueban la misma propiedad; una incoherencia posterior al alta se
+trata como éxito parcial y fuerza recarga para impedir duplicados.
 
 ## Chats
+
+Sin sesión, Chat no carga ni muestra conversaciones privadas. Su estado vacío
+incluye el CTA `Iniciar sesión`, conectado directamente a Cuenta.
+Con fuente grande el CTA aparece antes de la explicación y el estado se aloja
+en una lista desplazable, evitando que la acción quede fuera de la ventana al
+200 %. Los estados vacíos autenticados usan el mismo respaldo desplazable.
 
 ### Identidad visible
 
@@ -185,6 +277,19 @@ Flujo:
    los mensajes nuevos del otro usuario aparecen sin cerrar ni reabrir.
 8. Las páginas se combinan sin duplicados y se guardan mensajes, cantidad,
    versión y último ID después de descargar o enviar.
+9. IDs vacíos o mensajes de otra conversación se rechazan antes de Compose y de
+   la caché. Si un mensaje remoto repite un ID local, la versión remota más nueva
+   repara contenido, estado y nombre del remitente.
+10. El borrador permanece visible durante el envío y solo se limpia tras éxito;
+    un fallo conserva el texto. El listado usa un mutex por usuario y cada chat
+    usa otro para serializar sincronización, polling, recarga y envío. Cambiar de
+    conversación cancela su efecto visual sin bloquear otro chat.
+11. Si dos mensajes comparten `createdAt`, sus IDs se ordenan numéricamente
+    cuando ambos son enteros (`9` antes de `10`); otros IDs usan orden estable.
+12. Un mensaje antiguo sin `chatId` adopta el ID solicitado. Un mensaje que
+    declara un chat diferente invalida la página completa antes de UI o caché.
+13. Lectura y escritura de chats, mensajes y metadata se hacen en
+    `Dispatchers.IO`; la serialización de un historial no bloquea Compose.
 
 ### Notificaciones de mensajes
 
@@ -198,6 +303,12 @@ Flujo:
 - En primer plano aparece una tarjeta animada en la parte superior durante 5
   segundos con `nombre_de_usuario` y el contenido. El servicio entrega el evento
   a Compose mediante `ChatNotificationEventBus`; al tocarlo abre el chat.
+- Cada evento incluye el UUID destinatario. El centro de notificaciones y
+  Compose lo comparan con la sesión actual; eventos atrasados de otra cuenta se
+  descartan y el logout elimina notificaciones ya publicadas.
+- El Intent del `PendingIntent` conserva el mismo UUID. `MainActivity` descarta
+  accesos sin destinatario o de otra sesión antes de cambiar a la pestaña Chat;
+  la identidad del PendingIntent combina destinatario y conversación.
 - Fuera de la app se publica en el canal `appbike_new_messages`, de importancia
   alta, con el mismo nombre y mensaje. Tocar la notificación abre la conversación.
 - Android 13 o posterior solicita `POST_NOTIFICATIONS` una vez por instalación.

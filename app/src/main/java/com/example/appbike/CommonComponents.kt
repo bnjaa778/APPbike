@@ -20,20 +20,17 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Inventory2
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -48,18 +45,23 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.appbike.ui.theme.AppBackground
 import com.example.appbike.ui.theme.AppBackgroundElevated
+import com.example.appbike.ui.theme.AppAccentAmber
+import com.example.appbike.ui.theme.AppAccentBlue
 import com.example.appbike.ui.theme.AppBorderActive
 import com.example.appbike.ui.theme.AppBorderSubtle
 import com.example.appbike.ui.theme.AppError
 import com.example.appbike.ui.theme.AppErrorSoft
 import com.example.appbike.ui.theme.AppPrimary
 import com.example.appbike.ui.theme.AppPrimaryBright
+import com.example.appbike.ui.theme.AppPrimaryDark
 import com.example.appbike.ui.theme.AppPrimarySoft
 import com.example.appbike.ui.theme.AppSurface
 import com.example.appbike.ui.theme.AppSurfaceElevated
@@ -82,6 +84,13 @@ fun PremiumScreenBackground(
     content: @Composable () -> Unit
 ) {
     val base = AppBackground
+    val secondaryGlow = when (style) {
+        PremiumGlowStyle.Account -> AppAccentBlue
+        PremiumGlowStyle.Bikes -> AppAccentBlue
+        PremiumGlowStyle.Marketplace -> AppAccentAmber
+        PremiumGlowStyle.Chat -> AppPrimaryBright
+        PremiumGlowStyle.Map -> AppAccentBlue
+    }
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -95,15 +104,26 @@ fun PremiumScreenBackground(
                     PremiumGlowStyle.Chat -> 0.22f
                     PremiumGlowStyle.Map -> 0.18f
                 }
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        0.0f to AppPrimaryBright.copy(alpha = 0.18f),
-                        0.34f to AppPrimary.copy(alpha = 0.08f),
-                        1.0f to Color.Transparent
-                    ),
-                    radius = max * 0.28f,
-                    center = Offset(size.width * 0.04f, size.height * centerY)
-                )
+                clipRect {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            0.0f to AppPrimaryBright.copy(alpha = 0.24f),
+                            0.34f to AppPrimary.copy(alpha = 0.10f),
+                            1.0f to Color.Transparent
+                        ),
+                        radius = max * 0.34f,
+                        center = Offset(size.width * 0.04f, size.height * centerY)
+                    )
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            0.0f to secondaryGlow.copy(alpha = 0.11f),
+                            0.46f to secondaryGlow.copy(alpha = 0.04f),
+                            1.0f to Color.Transparent
+                        ),
+                        radius = max * 0.30f,
+                        center = Offset(size.width * 0.96f, size.height * 0.74f)
+                    )
+                }
             }
     ) {
         content()
@@ -130,8 +150,8 @@ fun Modifier.appSubtleGlow(enabled: Boolean = true): Modifier = drawBehind {
     if (!enabled) return@drawBehind
     drawCircle(
         brush = Brush.radialGradient(
-            0.0f to AppPrimary.copy(alpha = 0.18f),
-            0.42f to AppPrimary.copy(alpha = 0.07f),
+            0.0f to AppPrimaryBright.copy(alpha = 0.20f),
+            0.42f to AppPrimary.copy(alpha = 0.08f),
             1.0f to Color.Transparent
         ),
         radius = size.maxDimension * 0.64f,
@@ -151,7 +171,10 @@ fun AppCard(
         colors = CardDefaults.cardColors(
             containerColor = if (highlighted) AppSurfaceElevated else AppSurface
         ),
-        border = BorderStroke(1.dp, if (highlighted) AppBorderActive.copy(alpha = 0.32f) else AppBorderSubtle),
+        border = BorderStroke(
+            1.dp,
+            if (highlighted) AppBorderActive.copy(alpha = 0.58f) else AppBorderSubtle
+        ),
         elevation = CardDefaults.cardElevation(defaultElevation = if (highlighted) 6.dp else 0.dp)
     ) {
         Column(
@@ -222,6 +245,8 @@ fun EmptyState(
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null
 ) {
+    val largeText = LocalDensity.current.fontScale >= 1.6f
+
     AppCard(
         modifier = modifier.fillMaxWidth(),
         highlighted = true
@@ -238,16 +263,25 @@ fun EmptyState(
             )
             Text(
                 title,
+                modifier = Modifier.fillMaxWidth(),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
-                color = AppTextPrimary
+                color = AppTextPrimary,
+                textAlign = TextAlign.Center
             )
+            if (largeText && actionLabel != null && onAction != null) {
+                TextButton(onClick = onAction) {
+                    Text(actionLabel, color = AppPrimaryBright)
+                }
+            }
             Text(
                 description,
+                modifier = Modifier.fillMaxWidth(),
                 color = AppTextSecondary,
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center
             )
-            if (actionLabel != null && onAction != null) {
+            if (!largeText && actionLabel != null && onAction != null) {
                 TextButton(onClick = onAction) {
                     Text(actionLabel, color = AppPrimaryBright)
                 }
@@ -335,35 +369,69 @@ fun AppInput(
     label: String,
     value: String,
     visualTransformation: VisualTransformation = VisualTransformation.None,
+    singleLine: Boolean = true,
+    enabled: Boolean = true,
+    isError: Boolean = false,
+    supportingText: String? = null,
     onChange: (String) -> Unit
 ) {
+    var focused by remember { mutableStateOf(false) }
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
         label = { Text(label) },
         visualTransformation = visualTransformation,
-        modifier = Modifier.fillMaxWidth(),
+        singleLine = singleLine,
+        enabled = enabled,
+        isError = isError,
+        supportingText = supportingText?.let { message ->
+            { Text(message) }
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .appBikeTextFieldGlow()
+            .focusGlow(focused)
+            .onFocusChanged { focused = it.isFocused },
         shape = RoundedCornerShape(AppDimens.RadiusMedium),
         colors = appBikeTextFieldColors()
     )
 }
 
-fun Modifier.appBikeTextFieldGlow(): Modifier = this
+fun Modifier.appBikeTextFieldGlow(): Modifier = drawBehind {
+    val corner = 17.dp.toPx()
+    drawRoundRect(
+        color = AppPrimary.copy(alpha = 0.08f),
+        cornerRadius = CornerRadius(corner),
+        style = Stroke(width = 8.dp.toPx())
+    )
+    drawRoundRect(
+        brush = Brush.horizontalGradient(
+            listOf(
+                AppPrimaryDark.copy(alpha = 0.42f),
+                AppPrimaryBright.copy(alpha = 0.68f),
+                AppAccentBlue.copy(alpha = 0.36f),
+                AppPrimary.copy(alpha = 0.42f)
+            )
+        ),
+        cornerRadius = CornerRadius(corner),
+        style = Stroke(width = 1.dp.toPx())
+    )
+}
 
 fun Modifier.focusGlow(focused: Boolean): Modifier = drawBehind {
     if (!focused) return@drawBehind
-    val outerPadding = 6.dp.toPx()
-    val corner = 18.dp.toPx()
+    val corner = 17.dp.toPx()
     drawRoundRect(
-        brush = Brush.radialGradient(
-            0.0f to AppPrimary.copy(alpha = 0.16f),
-            1.0f to Color.Transparent,
-            center = Offset(size.width * 0.18f, size.height * 0.20f),
-            radius = size.maxDimension * 0.76f
+        color = AppPrimaryBright.copy(alpha = 0.10f),
+        cornerRadius = CornerRadius(corner),
+        style = Stroke(width = 12.dp.toPx())
+    )
+    drawRoundRect(
+        brush = Brush.horizontalGradient(
+            listOf(AppPrimary, AppPrimaryBright, AppAccentBlue, AppPrimary)
         ),
-        topLeft = Offset(-outerPadding, -outerPadding),
-        size = Size(size.width + outerPadding * 2, size.height + outerPadding * 2),
-        cornerRadius = CornerRadius(corner + outerPadding)
+        cornerRadius = CornerRadius(corner),
+        style = Stroke(width = 2.dp.toPx())
     )
 }
 
@@ -387,12 +455,13 @@ fun SearchField(
         modifier = modifier
             .fillMaxWidth()
             .defaultMinSize(minHeight = 56.dp)
+            .appBikeTextFieldGlow()
             .focusGlow(focused)
             .onFocusChanged { focused = it.isFocused },
         placeholder = {
             Text(
                 placeholder,
-                color = AppTextMuted,
+                color = AppTextSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -418,14 +487,14 @@ fun appBikeTextFieldColors(): TextFieldColors = OutlinedTextFieldDefaults.colors
     disabledContainerColor = AppSurface,
     errorContainerColor = AppSurfaceElevated,
     focusedBorderColor = AppBorderActive,
-    unfocusedBorderColor = Color.Transparent,
-    disabledBorderColor = Color.Transparent,
+    unfocusedBorderColor = AppPrimary.copy(alpha = 0.32f),
+    disabledBorderColor = AppPrimary.copy(alpha = 0.12f),
     errorBorderColor = AppError,
     cursorColor = AppPrimaryBright,
     focusedLabelColor = AppPrimaryBright,
     unfocusedLabelColor = AppTextSecondary,
-    focusedPlaceholderColor = AppTextMuted,
-    unfocusedPlaceholderColor = AppTextMuted,
+    focusedPlaceholderColor = AppTextSecondary,
+    unfocusedPlaceholderColor = AppTextSecondary,
     focusedSupportingTextColor = AppTextSecondary,
     unfocusedSupportingTextColor = AppTextSecondary,
     focusedLeadingIconColor = AppTextSecondary,
