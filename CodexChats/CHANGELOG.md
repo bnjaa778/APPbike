@@ -11,6 +11,8 @@ Cambios:
 
 - Se prepara la entrega completa de los cambios de aplicacion, pruebas,
   documentacion y toolchain presentes en la rama de trabajo.
+- La entrega funcional se confirmo como `3d5f00d` y se publico en GitHub en la
+  rama `redesign/purple-dark-ui`.
 
 Pruebas:
 
