@@ -51,3 +51,9 @@ Gradle. La API publica de GitHub mostro checkout y JDK 17 correctos, y fallo
 solamente en el paso de instalacion SDK. El workflow separa ahora las
 herramientas/licencias de la instalacion explicita mediante `sdkmanager`; el
 siguiente push verifica esa correccion con un log de paquete aislado.
+
+La segunda ejecucion ya confirmo que las herramientas/licencias son correctas y
+fallo solo al instalar el paquete solicitado. Los metadatos del SDK local
+identifican la plataforma de API 37 como `platforms;android-37.0` (rev 2,
+extension 22), por lo que el workflow usa ese identificador exacto y conserva
+`build-tools;37.0.0`.

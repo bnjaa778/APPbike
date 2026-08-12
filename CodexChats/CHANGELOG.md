@@ -1,5 +1,35 @@
 # Registro de cambios de CodexChats
 
+## 2026-08-11 - Identificador correcto de plataforma SDK en CI
+
+Objetivo:
+
+- Corregir el paquete Android exacto tras aislar el fallo de instalacion del
+  segundo workflow remoto.
+
+Cambios:
+
+- La plataforma de API 37 se instala como `platforms;android-37.0`; el nombre
+  anterior `platforms;android-37` no corresponde al paquete publicado.
+- Se conserva `build-tools;37.0.0`, que existe junto a la plataforma local
+  utilizada para compilar el proyecto.
+
+Pruebas:
+
+- Los metadatos locales de SDK verifican `api-level` 37, `extension-level` 22
+  y el paquete `platforms;android-37.0` rev 2.
+- `build-tools;37.0.0` esta presente y declarado por su `package.xml`.
+
+Pendientes:
+
+- Publicar este identificador y confirmar que Gradle ejecuta la verificacion
+  remota completa.
+
+Siguiente paso:
+
+- Si Gradle falla, diagnosticar la tarea concreta; no volver a cambiar la
+  instalacion SDK sin evidencia del log.
+
 ## 2026-08-11 - Correccion de instalacion SDK en CI
 
 Objetivo:
