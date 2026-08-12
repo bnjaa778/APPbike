@@ -228,6 +228,12 @@ Instrumentadas:
 
 Última ejecución local (2026-08-11): 44 pruebas unitarias sin fallos, Lint sin
 incidencias y `:app:assembleDebug` correcto con el icono vectorial de APPbike.
+La verificación remota de GitHub Actions `31551839752` terminó correctamente
+el 2026-08-12 UTC con JDK 17, SDK 37.0, las mismas pruebas unitarias, Lint y
+`assembleDebug` desde un runner limpio.
+La ejecucion `31552406399` repitio esa verificacion y publico el artefacto
+`appbike-debug-apk` (35,857,353 bytes, retencion de 14 dias) para instalar el
+mismo APK debug que fue comprobado.
 La última matriz instrumentada (2026-08-06) terminó con 24 pruebas sin fallos,
 con 2 omisiones esperadas por credenciales reales de Chat y
 condiciones de notificación del AVD. La migración coordinada a Gradle 9.6.1,

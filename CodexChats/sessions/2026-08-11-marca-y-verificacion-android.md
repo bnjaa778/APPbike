@@ -73,3 +73,6 @@ en dispositivo sigue separada porque requiere backend y QA.
 El workflow tambien conserva el artefacto `appbike-debug-apk` por 14 dias tras
 una verificacion correcta. Asi un revisor puede instalar exactamente el APK
 probado, sin confundirlo con una distribucion release firmada.
+
+La ejecucion `31552406399` valido esta entrega completa y publico el artefacto
+de 35,857,353 bytes despues de terminar correctamente pruebas, Lint y APK.

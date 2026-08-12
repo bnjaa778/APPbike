@@ -12,10 +12,11 @@ Este plan parte del estado confirmado en `docs/PROJECT_REPORT.md`,
 de ideas: cada fase entrega un contrato, código comprobable o una decisión de
 producto que desbloquea la siguiente.
 
-> Progreso al 2026-08-11: el workflow local
+> Progreso al 2026-08-11: el workflow
 > `.github/workflows/android-verify.yml` ya cubre pruebas unitarias, Lint y APK
-> debug en JDK 17/SDK 37. La fase 0 sigue abierta hasta tener su primera
-> ejecucion remota exitosa, cuentas de prueba, tablero y rama de release.
+> debug en JDK 17/SDK 37.0. La ejecucion remota `31551839752` ya termino
+> correctamente; la fase 0 sigue abierta por cuentas de prueba, tablero y rama
+> de release.
 
 ## 1. Punto de partida y definición de terminado
 
@@ -112,12 +113,12 @@ la misma versión antes de cambiar comportamiento.
 3. Crear dos cuentas de prueba aisladas, una publicación activa con foto,
    una junta activa con foto y una bicicleta descartable. Documentar dónde se
    regeneran, nunca sus contraseñas ni tokens.
-4. Publicar y comprobar la primera ejecución de la integración continua ya
-   preparada en `.github/workflows/android-verify.yml`; ejecuta
-   `:app:testDebugUnitTest`, `:app:lintDebug` y `:app:assembleDebug` con JDK 17
-   y SDK 37. La ejecución instrumentada queda en un job con emulador o
-   dispositivo gestionado y se añade al mismo control de cambios cuando sea
-   estable.
+4. **Completado:** publicar y comprobar la integración continua
+   `.github/workflows/android-verify.yml`. La ejecución `31552406399` terminó
+   correctamente con JDK 17, SDK 37.0, `:app:testDebugUnitTest`,
+   `:app:lintDebug`, `:app:assembleDebug` y el artefacto `appbike-debug-apk`.
+   La ejecución instrumentada queda en un job con emulador o dispositivo
+   gestionado y se añade al mismo control de cambios cuando sea estable.
 5. Corregir `CodexChats/MANUAL_WORKFLOW.md` si contiene rutas de SDK/JDK que no
    correspondan al equipo actual; debe usar variables o explicar cómo definirlas.
 6. Registrar versión inicial, SHA, tamaño del APK y resultados de prueba. El

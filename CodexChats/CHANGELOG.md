@@ -16,8 +16,8 @@ Cambios:
 
 Pruebas:
 
-- La configuracion se basa en el ejemplo oficial de `upload-artifact@v4` y se
-  valida con la siguiente ejecucion limpia de GitHub Actions.
+- GitHub Actions `31552406399` termino correctamente pruebas, Lint, APK y
+  `Upload debug APK`; publico `appbike-debug-apk` de 35,857,353 bytes.
 
 Pendientes:
 
@@ -26,8 +26,8 @@ Pendientes:
 
 Siguiente paso:
 
-- Confirmar el artefacto en la ejecucion remota y continuar la auditoria de
-  flujos autenticados solo con cuentas de prueba autorizadas.
+- Continuar la auditoria de flujos autenticados solo con cuentas de prueba
+  autorizadas; no inventar contratos ni datos privados.
 
 ## 2026-08-11 - Verificacion Android remota completada
 
