@@ -1,5 +1,46 @@
 # Registro de cambios de CodexChats
 
+## 2026-08-11 - Marca propia y verificacion automatizada Android
+
+Objetivo:
+
+- Consolidar el acabado visual de APPbike sin añadir assets generados
+  inconsistentes y reducir la verificacion manual repetitiva.
+
+Cambios:
+
+- Se reemplazo el icono generico de Android por una marca vectorial de bicicleta
+  grafito/verde, declarada para todas las densidades de lanzamiento.
+- La cabecera incorpora la misma señal de bicicleta usando el sistema de iconos
+  Material y conserva un unico encabezado semantico APPBIKE. En horizontal la
+  firma queda en una linea y en vertical mantiene el lema legible.
+- Se retiraron los catorce recursos genericos de launcher sin referencias.
+- Se agrego `.github/workflows/android-verify.yml` para pruebas unitarias, Lint
+  y APK debug con JDK 17, SDK 37 y cache Gradle.
+- La comprobacion remota publica confirma que Marketplace, Juntas y busqueda de
+  ubicacion responden; `location.reverse` sigue devolviendo HTTP 400 y requiere
+  correccion de backend, no un workaround visual en Android.
+
+Pruebas:
+
+- `:app:testDebugUnitTest`: 44 pruebas, 0 fallos, 0 errores.
+- `:app:lintDebug`: `No issues found`.
+- `:app:assembleDebug`: correcto; `aapt2` confirma
+  `@drawable/ic_appbike_launcher` como icono de todas las densidades.
+
+Pendientes:
+
+- Publicar la rama para ejecutar el workflow en GitHub y conectar un AVD o
+  dispositivo para repetir la matriz instrumentada y la inspeccion visual.
+- Las funciones dependientes de servidor continuan bloqueadas por contratos o
+  despliegues: registro/recuperacion, `location.reverse`, geografia/PostGIS,
+  listados privados multirregionales, FCM y OAuth deportivo.
+
+Siguiente paso:
+
+- Completar la fase 0 del roadmap con cuentas de prueba, primera CI remota y
+  matriz instrumentada antes de modificar contratos privados.
+
 ## 2026-08-07 - Roadmap manual de finalización
 
 Objetivo:

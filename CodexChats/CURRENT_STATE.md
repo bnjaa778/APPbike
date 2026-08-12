@@ -1,6 +1,6 @@
 # Estado actual de APPbike
 
-Actualizado: 2026-08-06.
+Actualizado: 2026-08-11.
 
 ## Aplicación
 
@@ -49,6 +49,8 @@ Actualizado: 2026-08-06.
   al recibir foco.
 - La barra inferior usa una sola familia de iconos Material tintables para
   Mapas, Bicicletas, Marketplace y Chat.
+- El icono de lanzamiento es una marca vectorial propia de bicicleta sobre
+  grafito y verde electrico; ya no empaqueta el recurso generico de Android.
 - Tipografía, radios, espaciado, tarjetas y estados comparten tokens centrales
   en `ui/theme/` y `CommonComponents.kt`.
 - `ui/theme/Color.kt` es la fuente única de color; los recursos morado/teal de
@@ -196,7 +198,7 @@ Actualizado: 2026-08-06.
 - Backup de nube y transferencia excluyen identidad, token cifrado, ubicaciones
   y cachés de Chat.
 - La UI pública se recorrió en el AVD `Small_Phone` el 2026-08-06 sin excepción
-  fatal ni ANR; compilaciones debug/release, 40 pruebas unitarias y 24 pruebas
+  fatal ni ANR; compilaciones debug/release, 44 pruebas unitarias y 24 pruebas
   instrumentadas terminaron sin fallos. Dos casos se omitieron por las
   condiciones externas esperadas de Chat y notificaciones. El proyecto usa
   Gradle 9.6.1, AGP 9.3.1, Kotlin integrado/Compose Compiler 2.4.10,
@@ -228,3 +230,11 @@ Actualizado: 2026-08-06.
   esa separación al agregar acciones nuevas para que un token vencido no rompa
   Mapas, Marketplace ni login.
 - Implementar FCM en backend y Android cuando exista el contrato de tokens.
+
+## Automatizacion de verificacion
+
+- `.github/workflows/android-verify.yml` prepara JDK 17, SDK 37 y cache de
+  Gradle; al recibir un push o pull request ejecuta pruebas unitarias, Lint y
+  `assembleDebug`.
+- La configuracion fue comprobada localmente el 2026-08-11. La primera ejecucion
+  remota queda pendiente hasta que se publique una rama con el workflow.

@@ -226,8 +226,10 @@ Instrumentadas:
   de bicicletas;
 - placeholders base del proyecto.
 
-Última ejecución (2026-08-06): 40 pruebas unitarias sin fallos; 24 instrumentadas
-sin fallos, con 2 omisiones esperadas por credenciales reales de Chat y
+Última ejecución local (2026-08-11): 44 pruebas unitarias sin fallos, Lint sin
+incidencias y `:app:assembleDebug` correcto con el icono vectorial de APPbike.
+La última matriz instrumentada (2026-08-06) terminó con 24 pruebas sin fallos,
+con 2 omisiones esperadas por credenciales reales de Chat y
 condiciones de notificación del AVD. La migración coordinada a Gradle 9.6.1,
 AGP 9.3.1, Kotlin integrado/Compose Compiler 2.4.10, API 37, Core 1.19,
 Lifecycle 2.11, Compose BOM 2026.06.01 y MapLibre 13.4.1 terminó correctamente.

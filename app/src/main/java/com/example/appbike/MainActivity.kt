@@ -76,6 +76,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import com.example.appbike.ui.theme.APPbikeTheme
 import com.example.appbike.ui.theme.AppBackgroundElevated
+import com.example.appbike.ui.theme.AppBorderActive
 import com.example.appbike.ui.theme.AppBorderSubtle
 import com.example.appbike.ui.theme.AppPrimaryBright
 import com.example.appbike.ui.theme.AppPrimarySoft
@@ -533,19 +534,33 @@ internal fun AppTopBar(
                     }
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "APP",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Black,
-                        color = AppTextPrimary
-                    )
-                    Text(
-                        text = "BIKE",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Black,
-                        color = AppPrimaryBright
-                    )
+                    Surface(
+                        modifier = Modifier.size(if (isLandscape) 32.dp else 36.dp),
+                        shape = MaterialTheme.shapes.small,
+                        color = AppPrimarySoft,
+                        border = BorderStroke(1.dp, AppBorderActive.copy(alpha = 0.60f))
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Outlined.DirectionsBike,
+                            contentDescription = null,
+                            modifier = Modifier.padding(6.dp),
+                            tint = AppPrimaryBright
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
                     if (isLandscape) {
+                        Text(
+                            text = "APP",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Black,
+                            color = AppTextPrimary
+                        )
+                        Text(
+                            text = "BIKE",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Black,
+                            color = AppPrimaryBright
+                        )
                         Spacer(Modifier.width(16.dp))
                         Text(
                             text = "RIDE  •  CONNECT",
@@ -554,21 +569,36 @@ internal fun AppTopBar(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                    } else {
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "APP",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Black,
+                                    color = AppTextPrimary
+                                )
+                                Text(
+                                    text = "BIKE",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Black,
+                                    color = AppPrimaryBright
+                                )
+                            }
+                            Spacer(Modifier.height(1.dp))
+                            Text(
+                                text = if (compactCopy) {
+                                    "RIDE  •  CONNECT"
+                                } else {
+                                    "RIDE  •  CONNECT  •  GROW"
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                color = AppPrimaryBright,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
-                }
-                if (!isLandscape) {
-                    Spacer(Modifier.height(1.dp))
-                    Text(
-                        text = if (compactCopy) {
-                            "RIDE  •  CONNECT"
-                        } else {
-                            "RIDE  •  CONNECT  •  GROW"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AppPrimaryBright,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
                 }
             }
 
