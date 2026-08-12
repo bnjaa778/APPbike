@@ -1,5 +1,62 @@
 # Registro de cambios de CodexChats
 
+## 2026-08-11 - APK descargable desde integracion continua
+
+Objetivo:
+
+- Hacer utilizable la verificacion remota para pruebas Android, conservando el
+  APK debug que ya fue compilado correctamente.
+
+Cambios:
+
+- El workflow publica `appbike-debug-apk` mediante `actions/upload-artifact@v4`
+  despues de pruebas, Lint y ensamblado correctos.
+- El artefacto se conserva 14 dias y el workflow falla si no existe el APK, por
+  lo que no puede anunciar una compilacion inexistente.
+
+Pruebas:
+
+- La configuracion se basa en el ejemplo oficial de `upload-artifact@v4` y se
+  valida con la siguiente ejecucion limpia de GitHub Actions.
+
+Pendientes:
+
+- Un APK debug permite pruebas, no sustituye una APK release firmada ni la
+  distribucion de produccion.
+
+Siguiente paso:
+
+- Confirmar el artefacto en la ejecucion remota y continuar la auditoria de
+  flujos autenticados solo con cuentas de prueba autorizadas.
+
+## 2026-08-11 - Verificacion Android remota completada
+
+Objetivo:
+
+- Cerrar la linea base reproducible de cliente Android con evidencia desde un
+  runner limpio, no solo desde el equipo de desarrollo.
+
+Cambios:
+
+- La configuracion portable de Gradle y la instalacion explicita de SDK 37.0
+  quedaron publicadas en la rama `redesign/purple-dark-ui`.
+
+Pruebas:
+
+- GitHub Actions completó correctamente checkout, JDK 17, herramientas SDK,
+  `platforms;android-37.0`, build-tools, cache Gradle, pruebas unitarias, Lint
+  y `assembleDebug` en la ejecucion `31551839752`.
+
+Pendientes:
+
+- La evidencia de CI no sustituye las pruebas autenticadas, FCM ni una matriz
+  en dispositivo fisico; esos contratos siguen sujetos a backend y QA.
+
+Siguiente paso:
+
+- Auditar cada flujo Android contra los contratos vigentes y corregir solo
+  brechas verificables antes de solicitar cuentas o cambios de backend.
+
 ## 2026-08-11 - Gradle portable para CI Android
 
 Objetivo:

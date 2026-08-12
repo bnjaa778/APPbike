@@ -236,5 +236,7 @@ Actualizado: 2026-08-11.
 - `.github/workflows/android-verify.yml` prepara JDK 17, SDK 37 y cache de
   Gradle; al recibir un push o pull request ejecuta pruebas unitarias, Lint y
   `assembleDebug`.
-- La configuracion fue comprobada localmente el 2026-08-11. La primera ejecucion
-  remota queda pendiente hasta que se publique una rama con el workflow.
+- La ejecucion remota `31551839752` completada el 2026-08-12 UTC verifico en un
+  runner limpio JDK 17, SDK 37.0, pruebas unitarias, Lint y `assembleDebug`.
+- Cada ejecucion correcta conserva durante 14 dias el artefacto descargable
+  `appbike-debug-apk`; es apto para pruebas, no para distribucion firmada.

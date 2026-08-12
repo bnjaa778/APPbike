@@ -63,3 +63,13 @@ Gradle, pero fallo al iniciar `Verify Android project`. La causa visible en el
 repositorio es `org.gradle.java.home` con una ruta absoluta de JBR de Android
 Studio para Windows. Se retira esa propiedad para que el runner use JDK 17 y
 Android Studio conserve la JVM que selecciona localmente.
+
+La cuarta ejecucion, `31551839752`, completo correctamente el workflow entero:
+checkout, JDK 17, herramientas SDK, `platforms;android-37.0`, build-tools,
+cache Gradle, pruebas unitarias, Lint y APK debug. La linea base Android queda
+verificada en local y en un runner GitHub limpio; la validacion autenticada y
+en dispositivo sigue separada porque requiere backend y QA.
+
+El workflow tambien conserva el artefacto `appbike-debug-apk` por 14 dias tras
+una verificacion correcta. Asi un revisor puede instalar exactamente el APK
+probado, sin confundirlo con una distribucion release firmada.
