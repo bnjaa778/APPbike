@@ -43,3 +43,11 @@ este repositorio Android.
 
 Publicar la rama, comprobar el workflow GitHub y ejecutar pruebas instrumentadas
 en Android 17 junto con una revision visual en retrato, horizontal y fuente 200 %.
+
+## Seguimiento de CI
+
+La ejecucion #1 del workflow publicada con el commit `da6e457` fallo antes de
+Gradle. La API publica de GitHub mostro checkout y JDK 17 correctos, y fallo
+solamente en el paso de instalacion SDK. El workflow separa ahora las
+herramientas/licencias de la instalacion explicita mediante `sdkmanager`; el
+siguiente push verifica esa correccion con un log de paquete aislado.

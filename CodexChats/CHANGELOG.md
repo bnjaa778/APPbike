@@ -1,5 +1,36 @@
 # Registro de cambios de CodexChats
 
+## 2026-08-11 - Correccion de instalacion SDK en CI
+
+Objetivo:
+
+- Convertir el primer fallo remoto de la verificacion Android en un diagnostico
+  reproducible y una configuracion de CI mas observable.
+
+Cambios:
+
+- La ejecucion GitHub Actions #1 confirmo checkout y JDK 17, pero fallo durante
+  `Set up Android SDK 37` antes de Gradle.
+- El workflow conserva `android-actions/setup-android` para herramientas y
+  licencias; la instalacion de `platforms;android-37` y `build-tools;37.0.0`
+  ahora es un paso separado de `sdkmanager` con un log propio.
+
+Pruebas:
+
+- La causa se identifico mediante el estado de pasos de la API publica de
+  GitHub: solo el paso de preparacion Android fallo; checkout y JDK terminaron.
+- El cambio no modifica codigo Android; las 44 pruebas unitarias, Lint y APK del
+  commit anterior siguen correctos localmente.
+
+Pendientes:
+
+- Publicar esta correccion y comprobar la segunda ejecucion del workflow.
+
+Siguiente paso:
+
+- Si `sdkmanager` falla, usar su log de paso para elegir el paquete o canal SDK
+  correcto, sin modificar aleatoriamente Gradle o Kotlin.
+
 ## 2026-08-11 - Marca propia y verificacion automatizada Android
 
 Objetivo:
