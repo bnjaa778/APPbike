@@ -1,5 +1,30 @@
 # Registro de cambios de CodexChats
 
+## 2026-08-11 - Revalidacion publica de dependencias backend
+
+Objetivo:
+
+- Verificar si los bloqueos de servidor identificados durante la auditoria ya
+  cambiaron, sin enviar credenciales ni mutar datos de produccion.
+
+Pruebas:
+
+- `location.reverse` para Santiago sigue respondiendo HTTP 400
+  `unknown_region`.
+- `location.search` para Santiago responde HTTP 200 pero sin sugerencias.
+- `marketplace.list` y `junta.list` publicos regionales siguen respondiendo
+  HTTP 200.
+
+Pendientes:
+
+- Siguen sin evidencia autenticada Bearer, alta/recuperacion de cuenta,
+  geografia resuelta por servidor, FCM ni una matriz en dispositivo fisico.
+
+Siguiente paso:
+
+- Retomar el cierre solo cuando backend y QA entreguen el contrato, cuentas y
+  dispositivos necesarios; no inventar acciones o resultados desde Android.
+
 ## 2026-08-11 - APK descargable desde integracion continua
 
 Objetivo:

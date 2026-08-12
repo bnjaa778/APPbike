@@ -48,3 +48,11 @@ que no pueden resolverse sin contrato, infraestructura o datos externos.
 La mejora que desbloquea el 100 % de producto requiere coordinacion del
 backend/QA con los cinco requisitos externos listados, no una reescritura
 adicional del cliente.
+
+## Revalidacion publica
+
+Una comprobacion posterior sin credenciales confirmo que el bloqueo continua:
+`location.reverse` para Santiago devuelve HTTP 400 `unknown_region` y
+`location.search` responde HTTP 200 sin sugerencias. Los listados publicos de
+Marketplace y Juntas siguen en HTTP 200. Esto no habilita las lecturas privadas,
+registro, recuperacion, FCM ni la prueba cruzada de dos cuentas.
