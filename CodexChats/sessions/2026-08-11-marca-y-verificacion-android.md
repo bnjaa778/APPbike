@@ -57,3 +57,9 @@ fallo solo al instalar el paquete solicitado. Los metadatos del SDK local
 identifican la plataforma de API 37 como `platforms;android-37.0` (rev 2,
 extension 22), por lo que el workflow usa ese identificador exacto y conserva
 `build-tools;37.0.0`.
+
+La tercera ejecucion instalo correctamente plataforma, build-tools y cache de
+Gradle, pero fallo al iniciar `Verify Android project`. La causa visible en el
+repositorio es `org.gradle.java.home` con una ruta absoluta de JBR de Android
+Studio para Windows. Se retira esa propiedad para que el runner use JDK 17 y
+Android Studio conserve la JVM que selecciona localmente.

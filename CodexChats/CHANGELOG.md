@@ -1,5 +1,35 @@
 # Registro de cambios de CodexChats
 
+## 2026-08-11 - Gradle portable para CI Android
+
+Objetivo:
+
+- Permitir que la verificacion remota use la JVM configurada por el runner, sin
+  depender de una instalacion de Android Studio local.
+
+Cambios:
+
+- Se elimino `org.gradle.java.home` de `gradle.properties`: apuntaba de forma
+  absoluta al JBR de Android Studio en Windows y no existe en GitHub Actions.
+- El workflow ya configura JDK 17; Android Studio mantiene su propia eleccion
+  de JVM al abrir el proyecto.
+
+Pruebas:
+
+- La tercera ejecucion remoto completo la instalacion de SDK y cache de Gradle;
+  el unico paso fallido fue `Verify Android project`, coherente con la ruta JVM
+  local antes de iniciar Gradle.
+- Se volvera a ejecutar pruebas, Lint y APK con la ruta absoluta eliminada.
+
+Pendientes:
+
+- Publicar el ajuste y verificar que la tarea Gradle termina en GitHub.
+
+Siguiente paso:
+
+- Si aparece un error de compilacion real despues de iniciar Gradle, corregir
+  solo esa causa a partir de su mensaje verificable.
+
 ## 2026-08-11 - Identificador correcto de plataforma SDK en CI
 
 Objetivo:
