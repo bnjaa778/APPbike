@@ -1855,3 +1855,36 @@ Siguiente paso:
 
 - Android Studio puede indexar/sincronizar el proyecto y mostrar los cambios ya
   guardados en disco.
+
+## 2026-08-16 - Publicación de la actualización en GitHub
+
+Objetivo:
+
+- Subir al repositorio remoto la versión verificada de APPbike con Novedades,
+  mejoras de mapa/clima e inicio de sesión MTB.
+
+Cambios:
+
+- Se auditaron los 42 archivos de la entrega y se excluyeron correctamente
+  `local.properties`, compilaciones y archivos locales ignorados.
+- La búsqueda preventiva no detectó claves privadas, tokens ni credenciales en
+  los archivos que se publicarían.
+- Se creó el commit `aa7f9f3` (`feat: añadir novedades, acceso MTB y mejoras de
+  mapa`) y se envió a `origin/redesign/purple-dark-ui`.
+
+Pruebas:
+
+- La rama local estaba sincronizada con su remoto antes del commit (`0/0`).
+- `git diff --cached --check`: correcto antes de confirmar.
+- `git push`: correcto, avance remoto `9b4d53d..aa7f9f3`.
+- Se conservan las validaciones de la entrega: 56 pruebas unitarias, Lint sin
+  errores, ensamblado correcto y regresiones instrumentadas aprobadas.
+
+Pendientes:
+
+- Ninguno para la publicación solicitada.
+
+Siguiente paso:
+
+- Revisar el workflow de GitHub Actions asociado a la rama si se desea generar
+  un nuevo artefacto CI.
