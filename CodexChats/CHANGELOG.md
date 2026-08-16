@@ -1448,3 +1448,410 @@ Siguiente paso:
 
 - Reiniciar Android Studio o abrir una terminal nueva para heredar las
   variables y ejecutar Sync Project with Gradle Files.
+
+## 2026-08-12 - Ejecucion en dispositivo Samsung fisico
+
+Objetivo:
+
+- Compilar, instalar y abrir APPbike en el dispositivo Android conectado por
+  USB.
+
+Cambios:
+
+- Se compilo la variante `debug` usando el JDK incluido con Android Studio.
+- Se reinicio ADB y se espero la autorizacion USB del Samsung `SM-A235M`.
+- Se reinstalo el APK con conservacion de datos mediante `adb install -r` y se
+  inicio `com.example.appbike/.MainActivity`.
+- No se modifico codigo fuente ni configuracion del proyecto.
+
+Pruebas:
+
+- `:app:assembleDebug`: correcto.
+- Instalacion ADB en `SM-A235M` (`R58T9039QBN`): `Success`.
+- Inicio con `adb shell am start -W`: `Status: ok`, arranque `COLD`.
+- `dumpsys activity`: `MainActivity` confirmada como `topResumedActivity`.
+
+Pendientes:
+
+- Ninguno para la instalacion y ejecucion solicitadas.
+
+Siguiente paso:
+
+- Realizar la validacion manual de los flujos visibles en el dispositivo.
+
+## 2026-08-12 - Mapa satelital, GPS preciso e identidad APPbike
+
+Objetivo:
+
+- Añadir una vista satelital al mapa, mejorar la precision de la ubicacion,
+  retirar la marca textual de MapLibre y renovar los iconos de bicicleta,
+  launcher, cabecera y splash de APPbike.
+
+Cambios:
+
+- `MapScreen.kt` ofrece un selector compacto `Mapa`/`Satélite`; el segundo modo
+  combina World Imagery y etiquetas de referencia de Esri.
+- El selector aplica el estilo sobre el mismo `MapView`, reinstala las fuentes
+  GeoJSON y descarta callbacks tardios mediante un identificador. Esta solucion
+  evita que el `SurfaceView` anterior quede visible al alternar en el Samsung.
+- El logo textual de MapLibre se oculta y el control de atribucion sigue activo.
+- La fila de ubicacion incorpora `Precisar` para repetir el permiso fino y la
+  captura GPS.
+- `DeviceLocationProvider` solicita GPS, red y proveedor pasivo en paralelo,
+  selecciona el punto fresco de menor `accuracy` y rechaza ubicaciones conocidas
+  con mas de cinco minutos.
+- Se genero un emblema original de bicicleta/A para APPbike y se integro como
+  launcher, icono redondo, marca de cabecera y splash inmediato. Bicicletas usa
+  ahora `PedalBike` en la barra inferior.
+- El arranque frio conserva el emblema durante una transicion Compose de 900 ms;
+  se elimino el intervalo oscuro detectado entre el splash nativo y la primera
+  pantalla.
+- Se retiro el vector de launcher anterior sin referencias y se documentaron
+  los contratos nuevos en `AGENTS.md`, `CURRENT_STATE.md` y `docs/`.
+
+Pruebas:
+
+- `:app:testDebugUnitTest`: correcto; la regresion nueva valida ambos modos,
+  fuentes raster, etiquetas y atribucion satelital.
+- `LocationQualityTest`: 3 pruebas verifican prioridad por precision, desempate
+  por actualidad y tratamiento de mediciones sin `accuracy`.
+- `:app:lintDebug`: `No issues found`.
+- `:app:assembleDebug`: correcto; APK de 64.630.951 bytes.
+- En el Samsung `SM-A235M` se verificaron visualmente el emblema de cabecera,
+  `PedalBike`, la accion `Precisar`, el selector inicial y la ausencia del texto
+  `MapLibre`.
+- La compilacion final se instalo con `adb install -r`: `Success`. Se comprobo
+  `Mapa`, el render satelital real y el regreso al estilo de calles sobre el
+  mismo proceso. Evidencia en `app/build/outputs/appbike-final-default.png`,
+  `appbike-final-satellite.png` y `appbike-map-final-return.png`.
+- `Precisar` propuso `-41.33296, -72.96802` y dejo visible la confirmacion; no se
+  acepto, por lo que `Fundo Libertad` siguio siendo la ubicacion persistida.
+- El arranque frio mostro el emblema centrado antes de Compose; evidencia en
+  `app/build/outputs/appbike-launch-brand.png`.
+- Logcat del proceso APPbike: 0 `FATAL EXCEPTION` y 0 ANR tras el arranque y la
+  alternancia de estilos.
+- El AVD no pudo usarse porque necesita 12 GB para `userdata` y quedaban 4,3 GB;
+  no se borraron sus datos.
+
+Pendientes:
+
+- No quedan pendientes de implementacion o validacion para esta solicitud.
+
+Siguiente paso:
+
+- Revision visual opcional del usuario en el Samsung ya instalado.
+
+## 2026-08-12 - Marca monocroma, arranque LED e iconos contextuales
+
+Objetivo:
+
+- Adoptar como identidad única el símbolo blanco sobre negro proporcionado por
+  el usuario, animarlo antes de entrar a APPbike y renovar los cuatro iconos de
+  la navegación inferior con metáforas menos literales.
+
+Cambios:
+
+- `appbike_brand_icon.png` se reemplazó por una copia exacta del PNG adjunto;
+  ambos archivos comparten SHA-256
+  `046370B091E2B8040E3467539DEBC6AC768EF6E5086589004ABF4140C0C86590`.
+- Manifest, icono redondo, cabecera y revelado de arranque consumen esa misma
+  fuente de marca. No quedan referencias al emblema verde anterior.
+- El splash de Android es negro y transparente respecto de la marca. Compose
+  anima 40 puntos blancos con halo desde las cuatro esquinas, los concentra en
+  el centro, revela el logo y abre la interfaz a los 2.550 ms.
+- La barra inferior usa `ic_nav_routes`, `ic_nav_bikes`,
+  `ic_nav_marketplace` e `ic_nav_chat`: ruta dinámica, eslabón, prisma de
+  intercambio y órbita social. Todos son vectores tintables y mantienen las
+  descripciones accesibles `Mapas`, `Bicicletas`, `Marketplace` y `Chat`.
+
+Pruebas:
+
+- `:app:testDebugUnitTest`: correcto, 20 suites sin fallos.
+- `:app:lintDebug`: correcto, 0 issues.
+- `:app:assembleDebug`: correcto; APK de 62.845.898 bytes.
+- Instalación final en `SM-A235M` (`R58T9039QBN`) mediante ADB: `Success`.
+- Validación visual real de puntos en esquinas, convergencia, logo formado,
+  cabecera y nueva familia inferior. Evidencias en
+  `app/build/outputs/appbike-led-170.png`, `appbike-led-final-logo.png`,
+  `appbike-led-final-formed.png` y `appbike-new-identity-final.png`.
+- Logcat del proceso: 0 `FATAL EXCEPTION` y 0 ANR.
+
+Pendientes:
+
+- No quedan pendientes de implementación o validación para esta solicitud.
+
+Siguiente paso:
+
+- Revisión visual opcional del usuario en el Samsung, donde la versión final ya
+  quedó instalada.
+
+## 2026-08-12 - Clima GPS en cabecera y perfil rider
+
+Objetivo:
+
+- Aprovechar el espacio contiguo a Cuenta para mostrar el tiempo local de cada
+  telefono mediante GPS, con iconos contextuales, y rediseñar el acceso de
+  perfil con lenguaje visual APPbike.
+
+Cambios:
+
+- La raiz obtiene la ubicacion actual con `DeviceLocationProvider` mientras la
+  actividad esta iniciada y actualiza el clima cada 15 minutos; un fallo se
+  reintenta al minuto y la falta de permiso se vuelve a comprobar sin bloquear.
+- `RemoteConnections.loadCurrentWeather` consulta Open-Meteo en
+  `Dispatchers.IO`, sin enviar el Bearer de APPbike, y parsea temperatura,
+  sensacion, dia/noche, precipitacion, nubosidad y codigo WMO.
+- `WeatherCondition` y `WeatherSnapshot` modelan el contrato. El encabezado
+  dibuja sol, luna, nubes, niebla, llovizna, lluvia, lluvia helada, nieve,
+  tormenta o granizo segun el codigo recibido.
+- El chip muestra atribucion visible `Open-Meteo`, abre la fuente y expone una
+  descripcion accesible completa. El endpoint gratuito directo queda
+  documentado solo para desarrollo/no comercial.
+- El acceso a Cuenta reemplaza la persona generica por un rider APPbike propio:
+  casco verde/blanco, visor azul, hombros y señal de sesion activa.
+- En vertical, la firma visible se compacta a `RIDE • CONNECT` para que marca,
+  tiempo y Cuenta permanezcan legibles sin elipsis.
+
+Pruebas:
+
+- `WeatherMappingTest`: codigos WMO, etiqueta dia/noche y construccion
+  normalizada del snapshot.
+- `:app:testDebugUnitTest`: 52 pruebas, 0 fallos.
+- `:app:assembleDebug`: correcto; APK final de 62.881.567 bytes.
+- `:app:lintDebug`: correcto, sin errores. Conserva dos advertencias conocidas:
+  actualizacion disponible del BOM y forma de launcher derivada del PNG exacto
+  solicitado por el usuario.
+- En el Samsung `SM-A235M`, el GPS resolvio la ubicacion persistida y la cabecera
+  mostro `6°`, `Noche clara`, luna y atribucion. Semantica verificada para clima
+  y perfil rider en `app/build/outputs/appbike-weather-final.xml`.
+- Evidencia visual: `app/build/outputs/appbike-weather-final.png`.
+- El APK final se reinstalo por ADB con resultado `Success`; el acceso rider
+  abrio `Tu perfil`, mantuvo el clima visible y quedo registrado en
+  `app/build/outputs/profile-tap-result-2.png`.
+- Logcat final: 0 `FATAL EXCEPTION` y 0 ANR de APPbike.
+
+Pendientes:
+
+- Para un lanzamiento comercial, mover el clima a un proxy backend o usar el
+  endpoint de cliente de Open-Meteo; no incluir credenciales en el APK.
+
+Siguiente paso:
+
+- Revisión visual opcional del usuario en el Samsung, donde la compilacion final
+  ya esta instalada.
+
+## 2026-08-12 - Restauracion del icono de perfil
+
+Objetivo:
+
+- Recuperar el icono de perfil anterior sin mover ni reducir el clima de la
+  cabecera.
+
+Cambios:
+
+- El acceso de Cuenta vuelve a `Icons.Outlined.PersonOutline`, con el mismo
+  color seleccionado, badge de sesion y contenedor tactil de 48 dp.
+- Se retiro `AppBikeProfileGlyph`; `WeatherStatusChip`, su ancho, el separador de
+  8 dp y la firma `RIDE • CONNECT` permanecen intactos.
+- Se actualizaron el estado actual, el informe tecnico y el router de trabajo.
+
+Pruebas:
+
+- `:app:testDebugUnitTest`: 52 pruebas, 0 fallos.
+- `:app:lintDebug`: correcto, sin errores nuevos; permanecen las dos
+  advertencias conocidas del BOM y la forma del launcher exacto.
+- `:app:assembleDebug`: correcto; APK final de 62.874.678 bytes.
+- Instalacion ADB en `SM-A235M` (`R58T9039QBN`): `Success`.
+- Verificacion visual real: icono anterior, badge de sesion y clima `6° / Noche
+  clara` conservan sus espacios. Evidencia en
+  `app/build/outputs/appbike-weather-old-profile-final.png`.
+- Semantica confirmada: `Cuenta y sincronización` y estado meteorologico con
+  atribucion Open-Meteo. Logcat: 0 `FATAL EXCEPTION` y 0 ANR.
+
+Pendientes:
+
+- Ninguno de implementacion.
+
+Siguiente paso:
+
+- Revisión visual opcional del usuario; la app final quedo instalada y abierta
+  en el Samsung conectado.
+
+## 2026-08-16 - Inicio de Novedades, gestos y mapa compacto
+
+Objetivo:
+
+- Abrir Cuenta después del logo solo cuando no exista una sesión completa,
+  convertir Inicio en un feed de Novedades tipo historias, compactar los
+  controles del mapa, detener el sobrezoom satelital, permitir desplazamiento
+  horizontal entre destinos e instalar la versión resultante en el teléfono.
+
+Cambios:
+
+- `initialDestinationFor` deriva una sesión ausente o sin nombre a Cuenta y una
+  sesión completa a Inicio. Login e identidad completada vuelven a Inicio;
+  logout limpia datos privados y permanece en Cuenta.
+- Antes de mostrar el destino de una sesión persistida, `user.get` la valida en
+  IO. `isAuthenticationFailure` distingue rechazo/expiración de token de timeout
+  o 5xx; solo el primer caso limpia identidad/token y muestra en Cuenta
+  `Tu sesión expiró. Inicia sesión nuevamente.`.
+- `HomeScreen.kt` carga juntas y publicaciones activas en paralelo, muestra una
+  fila de historias y tarjetas de feed con fotos reales/placeholder, e incluye
+  accesos a Mapas y Marketplace.
+- La barra inferior ahora contiene Inicio, Bicicletas, Marketplace y Chat. Un
+  gesto horizontal de 72 dp recorre esos destinos en ambos sentidos; Mapas no
+  instala el detector para conservar el paneo propio.
+- Mapas muestra inicialmente solo lupa y capas bajo la cabecera. La lupa
+  despliega buscador/ubicación semitransparentes y capas abre el menú
+  `Mapa`/`Satélite`.
+- La cámara satelital usa zoom máximo 17. Aunque la fuente anuncia nivel 19, la
+  prueba real encontró teselas grises en 19 y en sectores vecinos de 18 durante
+  el doble toque anclado; el nivel 17 conserva cobertura al detener el gesto.
+- Se añadieron `ic_nav_home`, regresiones de navegación/inicio y aserciones del
+  límite de zoom; se sincronizaron router, estado y documentación técnica.
+
+Pruebas:
+
+- `:app:testDebugUnitTest`: 56 pruebas, 0 fallos y 0 omisiones.
+- `:app:lintDebug`: correcto, 0 errores; quedan advertencias informativas de
+  versiones disponibles y la forma exacta del launcher entregado.
+- `:app:assembleDebug`: correcto; APK final de 62.928.018 bytes.
+- El test instrumentado nuevo compila y verifica la preferencia máxima de
+  MapLibre; su intento con el teléfono bloqueado terminó por timeout antes de
+  crear el `MapView`, sin fallo de aplicación.
+- Instalación ADB en `SM-A235M` (`R58T9039QBN`): `Success`, conservando datos.
+- La sesión real expirada del Samsung fue rechazada al nuevo arranque: las
+  entradas privadas `user_id`/`email` quedaron en 0 sin imprimir sus valores,
+  Cuenta quedó como destino y el proceso siguió vivo sin excepciones.
+- Validación real: Inicio abrió Novedades con la sesión guardada; swipes
+  Inicio → Bicicletas → Marketplace; lupa/capas, búsqueda semitransparente y
+  menú `Mapa`/`Satélite` visibles en Mapas. Evidencias en
+  `app/build/outputs/goal-2026-08-16/`.
+- El estrés detectó y descartó topes 19/18 por teselas grises de Esri. El APK
+  final instalado usa 17. Logcat final: 0 `FATAL EXCEPTION` y 0 ANR.
+
+Pendientes:
+
+- Ninguno de implementación. La captura posterior al último estrés quedó negra
+  porque el teléfono activó el bloqueo de pantalla; la app continuó viva.
+
+Siguiente paso:
+
+- Revisión manual opcional del stop de zoom 17 al desbloquear el Samsung; la
+  versión final ya quedó instalada y fue ejecutada.
+
+## 2026-08-16 - Clima informativo sin navegación
+
+Objetivo:
+
+- Mantener la temperatura, el estado, la iconografía y la atribución del clima
+  en la cabecera, pero impedir que un toque abra Open-Meteo u otra página.
+
+Cambios:
+
+- `WeatherStatusChip` dejó de ser `clickable` y ya no recibe una acción para
+  abrir la fuente.
+- `AppTopBar` dejó de crear el `Intent.ACTION_VIEW` hacia Open-Meteo.
+- La descripción accesible conserva el estado meteorológico y la atribución,
+  pero ya no anuncia una acción táctil inexistente.
+- Se agregó una regresión instrumentada que exige que el clima sea visible y no
+  tenga acción de clic; se sincronizaron router, estado e informe técnico.
+
+Pruebas:
+
+- `:app:testDebugUnitTest`: 56 pruebas, 0 fallos y 0 omisiones.
+- `:app:lintDebug`: correcto, 0 errores; permanecen 4 advertencias conocidas.
+- `:app:assembleDebug` y `:app:assembleDebugAndroidTest`: correctos; APK de
+  62.927.182 bytes.
+- Regresión `weatherStatusIsInformativeButNotClickable` ejecutada en el Samsung:
+  `OK (1 test)`.
+- La jerarquía real de Android mostró el clima actual con `clickable=false`.
+  Después de tocar sus coordenadas, `MainActivity` permaneció enfocada y no se
+  abrió el navegador. Logcat: 0 `FATAL EXCEPTION` y 0 ANR de APPbike.
+- Instalación ADB en `SM-A235M` (`R58T9039QBN`): `Success`; la app quedó abierta.
+
+Pendientes:
+
+- Ninguno de implementación o validación para esta solicitud.
+
+Siguiente paso:
+
+- Revisión manual opcional del usuario; la versión corregida ya está instalada
+  y abierta en el Samsung.
+
+## 2026-08-16 - Acceso MTB separado de Perfil
+
+Objetivo:
+
+- Mostrar después del logo una pantalla de login con identidad MTB solamente
+  cuando no existan datos de sesión válidos o el token sea rechazado/expire,
+  manteniendo el ingreso directo a Inicio para cuentas guardadas y aceptadas.
+
+Cambios:
+
+- La raiz presenta `UnauthenticatedAccessScreen` antes de componer cabecera,
+  Perfil o barra inferior cuando `accountSession` es nula.
+- El acceso usa `auth_mtb_background.png`, una fotografía vertical original de
+  un rider en sendero de montaña, con degradado oscuro y tarjeta semitransparente.
+- El formulario conserva el contrato `login` existente, ejecuta red en
+  `Dispatchers.IO`, mantiene errores visibles y guarda solo la sesión válida.
+- `Crear cuenta` queda visible y abre una explicación honesta: el backend aún no
+  publica una acción segura de alta y Android no inventa endpoints ni transmite
+  una contraseña a una operación inexistente.
+- Una sesión válida sigue abriendo Novedades; una cuenta aceptada pero sin
+  nombre de usuario conserva el flujo requerido de completar identidad en
+  Cuenta.
+- Se añadió `AuthenticationGatewayInstrumentedTest` y se sincronizaron router,
+  estado e informe técnico.
+
+Pruebas:
+
+- `:app:testDebugUnitTest`: 56 pruebas, 0 fallos y 0 omisiones.
+- `:app:lintDebug`: correcto, 0 errores; permanecen 4 advertencias conocidas.
+- `:app:assembleDebug` y `:app:assembleDebugAndroidTest`: correctos; APK final
+  de 65.746.046 bytes.
+- `AuthenticationGatewayInstrumentedTest` ejecutado en `SM-A235M`:
+  `OK (1 test)`; verificó el acceso, error de token y CTA de creación.
+- Validación visual real sin sesión: fondo MTB, marca, `Vuelve a rodar` y login
+  a pantalla completa; no aparecieron Perfil, clima ni barra inferior. Evidencia
+  en `app/build/outputs/auth-gateway-2026-08-16/auth-gateway.png`.
+- El login real del usuario abrió Novedades. Tras instalar nuevamente el APK y
+  reiniciar, la sesión guardada y aceptada volvió directamente a Inicio.
+- Instalación ADB en `SM-A235M` (`R58T9039QBN`): `Success`. Logcat final: 0
+  `FATAL EXCEPTION` y 0 ANR; `MainActivity` quedó enfocada y el proceso activo.
+
+Pendientes:
+
+- El alta real de cuentas depende de que backend publique y documente su
+  contrato seguro; no queda pendiente local para el login solicitado.
+
+Siguiente paso:
+
+- Cuando exista el contrato remoto, conectar `Crear cuenta` sin modificar la
+  puerta de acceso ya instalada.
+
+## 2026-08-16 - Proyecto abierto en Android Studio
+
+Objetivo:
+
+- Abrir en Android Studio la versión de APPbike que contiene el nuevo acceso
+  MTB.
+
+Cambios:
+
+- Se abrió `C:\Users\Benja(martulalover)\AndroidStudioProjects\APPbike` con la
+  instalación local de Android Studio; no se modificó código adicional.
+
+Pruebas:
+
+- Se confirmó que el proyecto existe y que el APK debug ensamblado permanece en
+  `app/build/outputs/apk/debug/app-debug.apk`.
+
+Pendientes:
+
+- Ninguno.
+
+Siguiente paso:
+
+- Android Studio puede indexar/sincronizar el proyecto y mostrar los cambios ya
+  guardados en disco.

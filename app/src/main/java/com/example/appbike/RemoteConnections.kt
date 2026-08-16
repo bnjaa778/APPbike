@@ -27,6 +27,7 @@ object RemoteConnections {
     private const val API_URL = "https://api.zizzio.cl/APIS/AppBikeExternal.php"
     private const val PUBLIC_BASE_URL = "https://api.zizzio.cl/"
     private const val OPEN_STREET_MAP_GEOCODER = "https://nominatim.openstreetmap.org"
+    private const val OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
     private const val GEOCODER_USER_AGENT = "APPbike-Android/1.0 (https://zizzio.cl)"
     private val PUBLIC_ACTIONS = setOf(
         "login",
@@ -1594,6 +1595,83 @@ object RemoteConnections {
             ?: SyncPlatform(provider, provider.replaceFirstChar(Char::uppercase), "", false)
     }
 
+    fun loadCurrentWeather(latitude: Double, longitude: Double): WeatherSnapshot {
+        require(latitude.isFinite() && latitude in -90.0..90.0) {
+            "Latitud meteorológica inválida."
+        }
+        require(longitude.isFinite() && longitude in -180.0..180.0) {
+            "Longitud meteorológica inválida."
+        }
+        val latitudeValue = String.format(Locale.US, "%.5f", latitude)
+        val longitudeValue = String.format(Locale.US, "%.5f", longitude)
+        val url = "$OPEN_METEO_FORECAST_URL" +
+            "?latitude=$latitudeValue" +
+            "&longitude=$longitudeValue" +
+            "&current=temperature_2m,apparent_temperature,is_day," +
+            "precipitation,weather_code,cloud_cover" +
+            "&temperature_unit=celsius&precipitation_unit=mm&timezone=auto"
+        val response = executePublicJsonGet(
+            url = url,
+            failureMessage = "No fue posible obtener el tiempo actual."
+        )
+        return weatherFromJson(response, latitude, longitude)
+    }
+
+    internal fun weatherFromJson(
+        response: JSONObject,
+        requestedLatitude: Double,
+        requestedLongitude: Double
+    ): WeatherSnapshot {
+        val current = response.optJSONObject("current")
+            ?: throw RemoteConnectionException("El servicio meteorológico no devolvió datos actuales.")
+        val temperature = current.firstDouble("temperature_2m")
+            ?.takeIf(Double::isFinite)
+            ?: throw RemoteConnectionException("El servicio meteorológico no devolvió temperatura.")
+        val weatherCode = current.firstInt("weather_code")
+            ?: throw RemoteConnectionException("El servicio meteorológico no devolvió el estado del cielo.")
+        return weatherSnapshotFromValues(
+            temperatureCelsius = temperature,
+            apparentTemperatureCelsius = current.firstDouble("apparent_temperature")
+                ?.takeIf(Double::isFinite),
+            weatherCode = weatherCode,
+            isDay = current.optInt("is_day", 1) == 1,
+            cloudCoverPercent = current.optInt("cloud_cover", 0),
+            precipitationMillimeters = current.optDouble("precipitation", 0.0)
+                .takeIf(Double::isFinite)
+                ?: 0.0,
+            observedAt = current.optString("time"),
+            latitude = response.optDouble("latitude", requestedLatitude)
+                .takeIf(Double::isFinite)
+                ?: requestedLatitude,
+            longitude = response.optDouble("longitude", requestedLongitude)
+                .takeIf(Double::isFinite)
+                ?: requestedLongitude
+        )
+    }
+
+    internal fun weatherSnapshotFromValues(
+        temperatureCelsius: Double,
+        apparentTemperatureCelsius: Double?,
+        weatherCode: Int,
+        isDay: Boolean,
+        cloudCoverPercent: Int,
+        precipitationMillimeters: Double,
+        observedAt: String,
+        latitude: Double,
+        longitude: Double
+    ) = WeatherSnapshot(
+        temperatureCelsius = temperatureCelsius,
+        apparentTemperatureCelsius = apparentTemperatureCelsius,
+        weatherCode = weatherCode,
+        condition = weatherConditionForWmoCode(weatherCode),
+        isDay = isDay,
+        cloudCoverPercent = cloudCoverPercent.coerceIn(0, 100),
+        precipitationMillimeters = precipitationMillimeters.coerceAtLeast(0.0),
+        observedAt = observedAt,
+        latitude = latitude,
+        longitude = longitude
+    )
+
     fun userFriendlyError(error: Throwable): String {
         val causes = generateSequence(error) { it.cause }.toList()
         val partialMessage = causes.filterIsInstance<RemotePartialSuccessException>()
@@ -1641,6 +1719,36 @@ object RemoteConnections {
             ?: return false
         return remote.statusCode in setOf(400, 404, 501) ||
             (remote.statusCode == 401 && !hasAccessToken)
+    }
+
+    internal fun isAuthenticationFailure(error: Throwable): Boolean {
+        val remote = generateSequence(error) { it.cause }
+            .filterIsInstance<RemoteConnectionException>()
+            .firstOrNull()
+            ?: return false
+        if (remote.statusCode == HttpURLConnection.HTTP_UNAUTHORIZED) return true
+
+        val code = remote.remoteCode.orEmpty().lowercase(Locale.ROOT)
+        if (code in setOf(
+                "invalid_token",
+                "token_invalid",
+                "expired_token",
+                "token_expired",
+                "unauthorized"
+            )
+        ) return true
+
+        val message = remote.message.orEmpty().lowercase(Locale.ROOT)
+        val mentionsCredential = "token" in message || "sesión" in message || "sesion" in message
+        val indicatesRejection = listOf(
+            "inválid",
+            "invalid",
+            "expir",
+            "vencid",
+            "no autorizado",
+            "unauthorized"
+        ).any(message::contains)
+        return mentionsCredential && indicatesRejection
     }
 
     private fun getResource(path: String, parameters: Map<String, String>): JSONObject {
@@ -1961,6 +2069,37 @@ object RemoteConnections {
                 )
             }
             return response
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun executePublicJsonGet(
+        url: String,
+        failureMessage: String,
+        connectTimeoutMs: Int = 12_000,
+        readTimeoutMs: Int = 15_000
+    ): JSONObject {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "GET"
+            connection.connectTimeout = connectTimeoutMs
+            connection.readTimeout = readTimeoutMs
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("User-Agent", GEOCODER_USER_AGENT)
+            val status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            val text = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (status !in 200..299 || text.isBlank()) {
+                throw RemoteConnectionException(failureMessage, statusCode = status)
+            }
+            return runCatching { JSONObject(text) }.getOrElse { cause ->
+                throw RemoteConnectionException("$failureMessage Respuesta inválida.", cause)
+            }
+        } catch (error: RemoteConnectionException) {
+            throw error
+        } catch (error: Exception) {
+            throw RemoteConnectionException(failureMessage, error)
         } finally {
             connection.disconnect()
         }

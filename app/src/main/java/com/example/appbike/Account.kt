@@ -5,6 +5,8 @@ import android.content.Intent
 import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,9 +15,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -50,9 +55,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -124,10 +135,236 @@ internal fun isValidAccountUserId(value: String): Boolean =
             "[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
     ).matches(value)
 
+internal const val AUTH_ACCESS_SCREEN_TEST_TAG = "auth_access_screen"
+
+@Composable
+internal fun UnauthenticatedAccessScreen(
+    initialErrorMessage: String? = null,
+    onLogin: (AccountSession) -> Unit
+) {
+    var identity by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf(initialErrorMessage) }
+    var showRegistrationNotice by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val windowHeight = LocalWindowInfo.current.containerSize.height
+    val compactHeight = with(LocalDensity.current) { windowHeight.toDp() < 720.dp }
+
+    LaunchedEffect(initialErrorMessage) {
+        if (!initialErrorMessage.isNullOrBlank()) {
+            errorMessage = initialErrorMessage
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag(AUTH_ACCESS_SCREEN_TEST_TAG)
+    ) {
+        Image(
+            painter = painterResource(R.drawable.auth_mtb_background),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.Black.copy(alpha = 0.18f),
+                            AppBackground.copy(alpha = 0.48f),
+                            AppBackground.copy(alpha = 0.97f)
+                        )
+                    )
+                )
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp, vertical = 22.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Surface(
+                    modifier = Modifier.size(58.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    color = Color.Black.copy(alpha = 0.72f),
+                    border = BorderStroke(1.dp, AppPrimaryBright.copy(alpha = 0.60f))
+                ) {
+                    Image(
+                        painter = painterResource(R.drawable.appbike_brand_icon),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    Text(
+                        "APPBIKE",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Black,
+                        color = AppTextPrimary
+                    )
+                    Text(
+                        "RIDE  •  CONNECT",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = AppPrimaryBright
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(if (compactHeight) 20.dp else 70.dp))
+
+            Text(
+                "ACCESO RIDER",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = AppPrimaryBright,
+                letterSpacing = 1.2.sp
+            )
+            Text(
+                "Vuelve a rodar",
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.Black,
+                color = Color.White
+            )
+            Text(
+                "Inicia sesión para recuperar tus bicicletas, rutas y comunidad.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color.White.copy(alpha = 0.82f)
+            )
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = AppSurfaceElevated.copy(alpha = 0.91f)
+                ),
+                shape = RoundedCornerShape(24.dp),
+                border = BorderStroke(1.dp, AppPrimaryBright.copy(alpha = 0.38f)),
+                elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Text(
+                        "Iniciar sesión",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = AppTextPrimary
+                    )
+                    AppInput(
+                        label = "Correo o nombre de usuario",
+                        value = identity,
+                        onChange = {
+                            identity = it
+                            errorMessage = null
+                        }
+                    )
+                    AppInput(
+                        label = "Contraseña",
+                        value = password,
+                        visualTransformation = PasswordVisualTransformation(),
+                        onChange = {
+                            password = it
+                            errorMessage = null
+                        }
+                    )
+
+                    errorMessage?.let { ErrorBanner(it) }
+
+                    Button(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(54.dp),
+                        enabled = identity.isNotBlank() && password.isNotBlank() && !isLoading,
+                        onClick = {
+                            scope.launch {
+                                isLoading = true
+                                errorMessage = null
+                                runSuspendCatching {
+                                    withContext(Dispatchers.IO) {
+                                        RemoteConnections.login(identity, password)
+                                    }
+                                }.onSuccess { authenticatedSession ->
+                                    identity = ""
+                                    password = ""
+                                    onLogin(authenticatedSession)
+                                }.onFailure {
+                                    errorMessage = RemoteConnections.userFriendlyError(it)
+                                }
+                                isLoading = false
+                            }
+                        }
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        } else {
+                            Text("Iniciar sesión")
+                        }
+                    }
+
+                    OutlinedButton(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        enabled = !isLoading,
+                        onClick = { showRegistrationNotice = true }
+                    ) {
+                        Text("Crear cuenta")
+                    }
+                }
+            }
+
+            Text(
+                "Tu sesión solo se conserva en este dispositivo cuando el acceso es válido.",
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White.copy(alpha = 0.68f)
+            )
+        }
+    }
+
+    if (showRegistrationNotice) {
+        AlertDialog(
+            onDismissRequest = { showRegistrationNotice = false },
+            title = { Text("Crear cuenta") },
+            text = {
+                Text(
+                    "El registro automático estará disponible cuando el servidor APPBIKE " +
+                        "habilite la creación segura de cuentas. No enviaremos tus datos " +
+                        "a una acción que todavía no existe."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showRegistrationNotice = false }) {
+                    Text("Entendido")
+                }
+            }
+        )
+    }
+}
+
 @Composable
 fun AccountScreen(
     session: AccountSession?,
     platforms: MutableList<SyncPlatform>,
+    initialErrorMessage: String? = null,
     oauthCallback: SportsOAuthCallback? = null,
     onOauthCallbackConsumed: () -> Unit = {},
     onLogin: (AccountSession) -> Unit,
@@ -137,13 +374,19 @@ fun AccountScreen(
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var errorMessage by remember(session?.userId) { mutableStateOf(initialErrorMessage) }
     var profileCheckedUserId by remember { mutableStateOf<String?>(null) }
     var usernameCandidate by remember(session?.userId) { mutableStateOf("") }
     var usernameLoading by remember { mutableStateOf(false) }
     var usernameError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
+
+    LaunchedEffect(initialErrorMessage, session?.userId) {
+        if (session == null && !initialErrorMessage.isNullOrBlank()) {
+            errorMessage = initialErrorMessage
+        }
+    }
 
     LaunchedEffect(session?.userId) {
         val activeSession = session ?: run {

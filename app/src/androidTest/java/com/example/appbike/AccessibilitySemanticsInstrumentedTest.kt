@@ -68,6 +68,37 @@ class AccessibilitySemanticsInstrumentedTest {
     }
 
     @Test
+    fun weatherStatusIsInformativeButNotClickable() {
+        compose.setContent {
+            APPbikeTheme(dynamicColor = false) {
+                WeatherStatusChip(
+                    state = WeatherHeaderState.Ready(
+                        WeatherSnapshot(
+                            temperatureCelsius = 18.0,
+                            apparentTemperatureCelsius = 17.5,
+                            weatherCode = 0,
+                            condition = WeatherCondition.CLEAR,
+                            isDay = true,
+                            cloudCoverPercent = 0,
+                            precipitationMillimeters = 0.0,
+                            observedAt = "2026-08-16T16:00",
+                            latitude = -33.45,
+                            longitude = -70.67
+                        )
+                    ),
+                    compact = false
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription(
+            "Despejado, 18 grados Celsius. Datos de Open-Meteo."
+        )
+            .assertIsDisplayed()
+            .assertHasNoClickAction()
+    }
+
+    @Test
     fun bikeSummaryIsClickableOnlyWhenAnActionExists() {
         val bike = Bike(
             name = "Ruta diaria",

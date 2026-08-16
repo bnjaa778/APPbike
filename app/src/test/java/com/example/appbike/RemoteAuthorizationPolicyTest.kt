@@ -77,4 +77,38 @@ class RemoteAuthorizationPolicyTest {
             )
         )
     }
+
+    @Test
+    fun authenticationFailureOnlyRecognizesRejectedCredentials() {
+        assertTrue(
+            RemoteConnections.isAuthenticationFailure(
+                RemoteConnections.RemoteConnectionException(
+                    "No autorizado",
+                    statusCode = 401
+                )
+            )
+        )
+        assertTrue(
+            RemoteConnections.isAuthenticationFailure(
+                RemoteConnections.RemoteConnectionException(
+                    "El token de acceso no es valido o expiro",
+                    statusCode = 400,
+                    remoteCode = "token_expired"
+                )
+            )
+        )
+        assertFalse(
+            RemoteConnections.isAuthenticationFailure(
+                RemoteConnections.RemoteConnectionException(
+                    "El servidor no está disponible",
+                    statusCode = 500
+                )
+            )
+        )
+        assertFalse(
+            RemoteConnections.isAuthenticationFailure(
+                java.net.SocketTimeoutException("timeout")
+            )
+        )
+    }
 }

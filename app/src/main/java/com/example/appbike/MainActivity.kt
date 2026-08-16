@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
+import androidx.annotation.DrawableRes
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.result.contract.ActivityResultContracts
@@ -16,8 +17,15 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,14 +40,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.DirectionsBike
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.PersonOutline
-import androidx.compose.material.icons.outlined.Storefront
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -59,12 +65,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -74,6 +84,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.example.appbike.ui.theme.APPbikeTheme
 import com.example.appbike.ui.theme.AppBackgroundElevated
 import com.example.appbike.ui.theme.AppBorderActive
@@ -83,7 +95,12 @@ import com.example.appbike.ui.theme.AppPrimarySoft
 import com.example.appbike.ui.theme.AppSurfaceElevated
 import com.example.appbike.ui.theme.AppTextPrimary
 import com.example.appbike.ui.theme.AppTextSecondary
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     private val sportsOauthCallback = mutableStateOf<SportsOAuthCallback?>(null)
@@ -104,12 +121,26 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             APPbikeTheme(dynamicColor = false) {
-                AppBikeApp(
-                    oauthCallback = sportsOauthCallback.value,
-                    onOauthCallbackConsumed = { sportsOauthCallback.value = null },
-                    notificationTarget = notificationChatTarget.value,
-                    onNotificationTargetConsumed = { notificationChatTarget.value = null }
-                )
+                var showLaunchBrand by remember {
+                    mutableStateOf(savedInstanceState == null)
+                }
+                LaunchedEffect(showLaunchBrand) {
+                    if (showLaunchBrand) {
+                        delay(LAUNCH_BRAND_DURATION_MS)
+                        showLaunchBrand = false
+                    }
+                }
+
+                if (showLaunchBrand) {
+                    LaunchBrandScreen()
+                } else {
+                    AppBikeApp(
+                        oauthCallback = sportsOauthCallback.value,
+                        onOauthCallbackConsumed = { sportsOauthCallback.value = null },
+                        notificationTarget = notificationChatTarget.value,
+                        onNotificationTargetConsumed = { notificationChatTarget.value = null }
+                    )
+                }
             }
         }
     }
@@ -182,6 +213,133 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private const val LAUNCH_BRAND_ANIMATION_MS = 2_200
+private const val LAUNCH_BRAND_DURATION_MS = 2_550L
+private const val WEATHER_REFRESH_INTERVAL_MS = 15 * 60 * 1_000L
+private const val WEATHER_RETRY_INTERVAL_MS = 60_000L
+private const val WEATHER_PERMISSION_RECHECK_MS = 2_000L
+private const val MAIN_SWIPE_THRESHOLD_DP = 72
+
+private val MAIN_SWIPE_DESTINATIONS = listOf(
+    AppScreen.HOME,
+    AppScreen.BIKES,
+    AppScreen.MARKETPLACE,
+    AppScreen.CHAT
+)
+
+internal fun initialDestinationFor(session: AccountSession?): AppScreen =
+    if (session == null || session.username.isNullOrBlank()) {
+        AppScreen.ACCOUNT
+    } else {
+        AppScreen.HOME
+    }
+
+internal fun mainDestinationAfterSwipe(
+    current: AppScreen,
+    horizontalDrag: Float,
+    threshold: Float
+): AppScreen {
+    if (kotlin.math.abs(horizontalDrag) < threshold) return current
+    val currentIndex = MAIN_SWIPE_DESTINATIONS.indexOf(current)
+    if (currentIndex < 0) return current
+    val targetIndex = if (horizontalDrag < 0f) currentIndex + 1 else currentIndex - 1
+    return MAIN_SWIPE_DESTINATIONS[targetIndex.coerceIn(MAIN_SWIPE_DESTINATIONS.indices)]
+}
+
+@Composable
+private fun LaunchBrandScreen() {
+    val progress = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        progress.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(
+                durationMillis = LAUNCH_BRAND_ANIMATION_MS,
+                easing = LinearEasing
+            )
+        )
+    }
+    val animationProgress = progress.value
+    val revealProgress = FastOutSlowInEasing.transform(
+        ((animationProgress - 0.48f) / 0.30f).coerceIn(0f, 1f)
+    )
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = Color.Black
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clearAndSetSemantics { }
+            ) {
+                val center = Offset(size.width / 2f, size.height / 2f)
+                val logoRadius = size.minDimension * 0.21f
+                val glowRadius = 7.dp.toPx()
+                val ledRadius = 2.15.dp.toPx()
+                val corners = arrayOf(
+                    Offset.Zero,
+                    Offset(size.width, 0f),
+                    Offset(0f, size.height),
+                    Offset(size.width, size.height)
+                )
+
+                repeat(40) { index ->
+                    val stagger = (index % 10) * 0.018f
+                    val travel = ((animationProgress - stagger) / 0.62f)
+                        .coerceIn(0f, 1f)
+                    val easedTravel = FastOutSlowInEasing.transform(travel)
+                    val angle = Math.toRadians(index * 137.508)
+                    val ring = 0.18f + (index % 7) / 8f
+                    val target = Offset(
+                        x = center.x + cos(angle).toFloat() * logoRadius * ring,
+                        y = center.y + sin(angle).toFloat() * logoRadius * ring * 1.28f
+                    )
+                    val origin = corners[index % corners.size]
+                    val bend = sin(PI * easedTravel).toFloat() *
+                        logoRadius * (0.08f + (index % 3) * 0.025f)
+                    val bendDirection = if ((index / 4) % 2 == 0) 1f else -1f
+                    val position = Offset(
+                        x = origin.x + (target.x - origin.x) * easedTravel + bend * bendDirection,
+                        y = origin.y + (target.y - origin.y) * easedTravel - bend * bendDirection
+                    )
+                    val settled = ((travel - 0.72f) / 0.28f).coerceIn(0f, 1f)
+                    val particleAlpha = ((1f - revealProgress) * (1f - settled * 0.55f))
+                        .coerceIn(0f, 1f)
+                    if (particleAlpha > 0.01f) {
+                        drawCircle(
+                            color = Color.White.copy(alpha = particleAlpha * 0.16f),
+                            radius = glowRadius,
+                            center = position
+                        )
+                        drawCircle(
+                            color = Color.White.copy(alpha = particleAlpha),
+                            radius = ledRadius + (index % 3) * 0.35.dp.toPx(),
+                            center = position
+                        )
+                    }
+                }
+            }
+            Image(
+                painter = painterResource(R.drawable.appbike_brand_icon),
+                contentDescription = "APPBIKE",
+                modifier = Modifier
+                    .size(340.dp)
+                    .graphicsLayer {
+                        alpha = revealProgress
+                        val revealScale = 0.84f + revealProgress * 0.16f
+                        scaleX = revealScale
+                        scaleY = revealScale
+                    },
+                contentScale = ContentScale.Fit
+            )
+        }
+    }
+}
+
 data class NotificationChatTarget(
     val recipientUserId: String,
     val chatId: String,
@@ -199,7 +357,7 @@ data class NotificationChatTarget(
 private data class MainDestination(
     val label: String,
     val screen: AppScreen,
-    val icon: ImageVector
+    @DrawableRes val iconRes: Int
 )
 
 @Composable
@@ -209,11 +367,16 @@ fun AppBikeApp(
     notificationTarget: NotificationChatTarget? = null,
     onNotificationTargetConsumed: () -> Unit = {}
 ) {
-    var currentScreen by remember { mutableStateOf(AppScreen.ROUTES) }
     val context = LocalContext.current
-    var accountSession by remember {
-        mutableStateOf(AccountStore.loadSession(context).also(RemoteConnections::setSession))
+    val initialSession = remember(context) {
+        AccountStore.loadSession(context).also(RemoteConnections::setSession)
     }
+    var accountSession by remember {
+        mutableStateOf(initialSession)
+    }
+    var currentScreen by remember { mutableStateOf(initialDestinationFor(initialSession)) }
+    var isValidatingInitialSession by remember { mutableStateOf(initialSession != null) }
+    var initialLoginError by remember { mutableStateOf<String?>(null) }
 
     val bikes = remember { mutableStateListOf<Bike>() }
     val reminders = remember { mutableStateListOf<MaintenanceReminder>() }
@@ -222,6 +385,9 @@ fun AppBikeApp(
     val pendingNotifications = remember { mutableStateListOf<MessageNotificationEvent>() }
     var activeNotification by remember { mutableStateOf<MessageNotificationEvent?>(null) }
     var unreadMessages by remember { mutableIntStateOf(0) }
+    var weatherState by remember {
+        mutableStateOf<WeatherHeaderState>(WeatherHeaderState.WaitingForLocation)
+    }
     val platforms = remember {
         mutableStateListOf(
             SyncPlatform("strava", "Strava", "Actividades, rutas y entrenamientos.", false),
@@ -232,26 +398,116 @@ fun AppBikeApp(
 
     val destinations = remember {
         listOf(
-            MainDestination("Mapas", AppScreen.ROUTES, Icons.Outlined.Map),
+            MainDestination("Inicio", AppScreen.HOME, R.drawable.ic_nav_home),
+            MainDestination("Bicicletas", AppScreen.BIKES, R.drawable.ic_nav_bikes),
             MainDestination(
-                "Bicicletas",
-                AppScreen.BIKES,
-                Icons.AutoMirrored.Outlined.DirectionsBike
+                "Marketplace",
+                AppScreen.MARKETPLACE,
+                R.drawable.ic_nav_marketplace
             ),
-            MainDestination("Marketplace", AppScreen.MARKETPLACE, Icons.Outlined.Storefront),
-            MainDestination("Chat", AppScreen.CHAT, Icons.Outlined.ChatBubbleOutline)
+            MainDestination("Chat", AppScreen.CHAT, R.drawable.ic_nav_chat)
         )
     }
 
+    LaunchedEffect(initialSession?.userId, initialSession?.accessToken) {
+        val storedSession = initialSession ?: run {
+            isValidatingInitialSession = false
+            return@LaunchedEffect
+        }
+        val result = runSuspendCatching {
+            withContext(Dispatchers.IO) {
+                RemoteConnections.loadUserProfile(storedSession)
+            }
+        }
+        if (accountSession?.userId != storedSession.userId) {
+            isValidatingInitialSession = false
+            return@LaunchedEffect
+        }
+        result.onSuccess { verifiedSession ->
+            AccountStore.saveSession(context, verifiedSession)
+            RemoteConnections.setSession(verifiedSession)
+            accountSession = verifiedSession
+            currentScreen = initialDestinationFor(verifiedSession)
+        }.onFailure { error ->
+            if (RemoteConnections.isAuthenticationFailure(error)) {
+                ChatNotificationCenter.stopListener(context)
+                ChatNotificationCenter.cancelBackgroundChecks(context)
+                ChatNotificationCenter.clearNotifications(context)
+                AccountStore.clearSession(context)
+                RemoteConnections.setSession(null)
+                accountSession = null
+                currentScreen = AppScreen.ACCOUNT
+                initialLoginError = "Tu sesión expiró. Inicia sesión nuevamente."
+                bikes.clear()
+                reminders.clear()
+                bookings.clear()
+            }
+        }
+        isValidatingInitialSession = false
+    }
+
     LaunchedEffect(accountSession?.userId, accountSession?.username) {
-        val session = accountSession ?: return@LaunchedEffect
+        val session = accountSession ?: run {
+            currentScreen = AppScreen.ACCOUNT
+            return@LaunchedEffect
+        }
         (context as? MainActivity)?.requestNotificationPermissionOnce()
         if (session.username.isNullOrBlank()) {
             currentScreen = AppScreen.ACCOUNT
         }
     }
 
-    LaunchedEffect(accountSession?.userId) {
+    LaunchedEffect(context) {
+        val lifecycle = (context as? MainActivity)?.lifecycle ?: return@LaunchedEffect
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                val hasLocationPermission = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+
+                if (!hasLocationPermission) {
+                    weatherState = WeatherHeaderState.WaitingForLocation
+                    delay(WEATHER_PERMISSION_RECHECK_MS)
+                    continue
+                }
+
+                if (weatherState !is WeatherHeaderState.Ready) {
+                    weatherState = WeatherHeaderState.Loading
+                }
+                val result = runSuspendCatching {
+                    val point = DeviceLocationProvider.currentLocation(context)
+                    withContext(Dispatchers.IO) {
+                        RemoteConnections.loadCurrentWeather(
+                            latitude = point.latitude,
+                            longitude = point.longitude
+                        )
+                    }
+                }
+                weatherState = result.fold(
+                    onSuccess = WeatherHeaderState::Ready,
+                    onFailure = {
+                        WeatherHeaderState.Unavailable(
+                            RemoteConnections.userFriendlyError(it)
+                        )
+                    }
+                )
+                delay(
+                    if (result.isSuccess) {
+                        WEATHER_REFRESH_INTERVAL_MS
+                    } else {
+                        WEATHER_RETRY_INTERVAL_MS
+                    }
+                )
+            }
+        }
+    }
+
+    LaunchedEffect(accountSession?.userId, isValidatingInitialSession) {
+        if (isValidatingInitialSession) return@LaunchedEffect
         val session = accountSession
         if (session == null) {
             ChatNotificationCenter.stopListener(context)
@@ -300,6 +556,57 @@ fun AppBikeApp(
         onNotificationTargetConsumed()
     }
 
+    if (isValidatingInitialSession) {
+        SessionValidationScreen()
+        return
+    }
+
+    val completeLogin: (AccountSession) -> Unit = { session ->
+        initialLoginError = null
+        AccountStore.saveSession(context, session)
+        RemoteConnections.setSession(session)
+        accountSession = session
+        currentScreen = if (session.username.isNullOrBlank()) {
+            AppScreen.ACCOUNT
+        } else {
+            AppScreen.HOME
+        }
+    }
+
+    if (accountSession == null) {
+        UnauthenticatedAccessScreen(
+            initialErrorMessage = initialLoginError,
+            onLogin = completeLogin
+        )
+        return
+    }
+
+    val swipeThresholdPx = with(LocalDensity.current) { MAIN_SWIPE_THRESHOLD_DP.dp.toPx() }
+    val mainDestinationSwipeModifier = if (currentScreen in MAIN_SWIPE_DESTINATIONS) {
+        Modifier.pointerInput(currentScreen, swipeThresholdPx) {
+            var horizontalDrag = 0f
+            detectHorizontalDragGestures(
+                onDragStart = { horizontalDrag = 0f },
+                onHorizontalDrag = { _, dragAmount -> horizontalDrag += dragAmount },
+                onDragCancel = { horizontalDrag = 0f },
+                onDragEnd = {
+                    val target = mainDestinationAfterSwipe(
+                        current = currentScreen,
+                        horizontalDrag = horizontalDrag,
+                        threshold = swipeThresholdPx
+                    )
+                    if (target != currentScreen) {
+                        if (target == AppScreen.CHAT) unreadMessages = 0
+                        currentScreen = target
+                    }
+                    horizontalDrag = 0f
+                }
+            )
+        }
+    } else {
+        Modifier
+    }
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
@@ -317,6 +624,7 @@ fun AppBikeApp(
                     AppTopBar(
                         session = accountSession,
                         accountSelected = currentScreen == AppScreen.ACCOUNT,
+                        weatherState = weatherState,
                         onAccountClick = { currentScreen = AppScreen.ACCOUNT }
                     )
                 }
@@ -327,30 +635,34 @@ fun AppBikeApp(
                     .fillMaxWidth()
                     .weight(1f)
                     .clipToBounds()
+                    .then(mainDestinationSwipeModifier)
             ) {
             when (currentScreen) {
                 AppScreen.ACCOUNT, AppScreen.SYNC -> AccountScreen(
                     session = accountSession,
                     platforms = platforms,
+                    initialErrorMessage = initialLoginError,
                     oauthCallback = oauthCallback,
                     onOauthCallbackConsumed = onOauthCallbackConsumed,
-                    onLogin = { session ->
-                        AccountStore.saveSession(context, session)
-                        RemoteConnections.setSession(session)
-                        accountSession = session
-                    },
+                    onLogin = completeLogin,
                     onSessionUpdated = { session ->
+                        val wasCompletingIdentity = accountSession?.username.isNullOrBlank()
                         AccountStore.saveSession(context, session)
                         RemoteConnections.setSession(session)
                         accountSession = session
+                        if (wasCompletingIdentity && !session.username.isNullOrBlank()) {
+                            currentScreen = AppScreen.HOME
+                        }
                     },
                     onLogout = {
+                        initialLoginError = null
                         ChatNotificationCenter.stopListener(context)
                         ChatNotificationCenter.cancelBackgroundChecks(context)
                         ChatNotificationCenter.clearNotifications(context)
                         AccountStore.clearSession(context)
                         RemoteConnections.setSession(null)
                         accountSession = null
+                        currentScreen = AppScreen.ACCOUNT
                         bikes.clear()
                         reminders.clear()
                         bookings.clear()
@@ -376,7 +688,13 @@ fun AppBikeApp(
                         onOpenAccount = { currentScreen = AppScreen.ACCOUNT }
                     )
 
-                AppScreen.ROUTES, AppScreen.HOME -> RoutesScreen(
+                AppScreen.HOME -> HomeScreen(
+                    session = accountSession,
+                    onOpenMap = { currentScreen = AppScreen.ROUTES },
+                    onOpenMarketplace = { currentScreen = AppScreen.MARKETPLACE }
+                )
+
+                AppScreen.ROUTES -> RoutesScreen(
                     account = accountSession,
                     onOpenChat = { chat ->
                         chatToOpen = chat
@@ -423,6 +741,35 @@ fun AppBikeApp(
                     }
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun SessionValidationScreen() {
+    Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Image(
+                painter = painterResource(R.drawable.appbike_brand_icon),
+                contentDescription = "APPBIKE",
+                modifier = Modifier.size(220.dp),
+                contentScale = ContentScale.Fit
+            )
+            CircularProgressIndicator(
+                modifier = Modifier.size(30.dp),
+                color = AppPrimaryBright,
+                strokeWidth = 2.dp
+            )
+            Text(
+                "Verificando sesión…",
+                modifier = Modifier.padding(top = 14.dp),
+                color = AppTextSecondary,
+                style = MaterialTheme.typography.bodyMedium
+            )
         }
     }
 }
@@ -499,6 +846,7 @@ private fun InAppMessageBanner(
 internal fun AppTopBar(
     session: AccountSession?,
     accountSelected: Boolean,
+    weatherState: WeatherHeaderState = WeatherHeaderState.WaitingForLocation,
     onAccountClick: () -> Unit
 ) {
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -540,11 +888,16 @@ internal fun AppTopBar(
                         color = AppPrimarySoft,
                         border = BorderStroke(1.dp, AppBorderActive.copy(alpha = 0.60f))
                     ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Outlined.DirectionsBike,
+                        Image(
+                            painter = painterResource(R.drawable.appbike_brand_icon),
                             contentDescription = null,
-                            modifier = Modifier.padding(6.dp),
-                            tint = AppPrimaryBright
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    scaleX = 1.18f
+                                    scaleY = 1.18f
+                                },
+                            contentScale = ContentScale.Fit
                         )
                     }
                     Spacer(Modifier.width(10.dp))
@@ -587,11 +940,7 @@ internal fun AppTopBar(
                             }
                             Spacer(Modifier.height(1.dp))
                             Text(
-                                text = if (compactCopy) {
-                                    "RIDE  •  CONNECT"
-                                } else {
-                                    "RIDE  •  CONNECT  •  GROW"
-                                },
+                                text = "RIDE  •  CONNECT",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = AppPrimaryBright,
                                 maxLines = 1,
@@ -601,6 +950,12 @@ internal fun AppTopBar(
                     }
                 }
             }
+
+            WeatherStatusChip(
+                state = weatherState,
+                compact = compactCopy
+            )
+            Spacer(Modifier.width(8.dp))
 
             Surface(
                 modifier = Modifier.size(48.dp),
@@ -664,6 +1019,7 @@ private fun AppBottomBar(
         ) {
             destinations.forEach { destination ->
                 val selected = currentScreen == destination.screen ||
+                    (destination.screen == AppScreen.HOME && currentScreen == AppScreen.ROUTES) ||
                     (destination.screen == AppScreen.MARKETPLACE &&
                         currentScreen == AppScreen.CREATE_PUBLICATION)
                 val visibleLabel = if (compactLabels) {
@@ -688,7 +1044,7 @@ private fun AppBottomBar(
                             }
                         ) {
                             Icon(
-                                imageVector = destination.icon,
+                                painter = painterResource(destination.iconRes),
                                 contentDescription = destination.label,
                                 modifier = Modifier.size(if (isLandscape) 24.dp else 26.dp)
                             )

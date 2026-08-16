@@ -4,7 +4,7 @@ Este archivo es la entrada principal para trabajar en APPbike. Usalo como
 router: antes de editar, identifica el tipo de tarea, abre primero los archivos
 indicados y conserva los contratos documentados aqui.
 
-Ultima revision del proyecto: 2026-08-06.
+Ultima revision del proyecto: 2026-08-16.
 
 ## Regla de oro
 
@@ -31,7 +31,7 @@ Ultima revision del proyecto: 2026-08-06.
 - Entrada Android: `MainActivity`.
 - Tema Compose: `ui/theme/Theme.kt`.
 - Navegacion principal con barra inferior persistente.
-- Orden de barra inferior: Mapas, Bicicletas, Marketplace, Chat.
+- Orden de barra inferior: Inicio, Bicicletas, Marketplace, Chat.
 - Cuenta y sincronizacion deportiva estan en una misma pantalla accesible desde
   el boton de perfil de la cabecera.
 - API publica base: `https://api.zizzio.cl/APIS/AppBikeExternal.php`.
@@ -47,6 +47,8 @@ Ultima revision del proyecto: 2026-08-06.
 | Si la tarea trata de... | Abrir primero | Revisar despues |
 |---|---|---|
 | Navegacion, cabecera o barra inferior | `MainActivity.kt` | `AppModels.kt`, `CommonComponents.kt` |
+| Inicio o Novedades | `HomeScreen.kt` | `MainActivity.kt`, `RemoteConnections.kt`, `LocalDataStore.kt` |
+| Clima del encabezado | `HeaderStatusComponents.kt` | `MainActivity.kt`, `DeviceLocationProvider.kt`, `RemoteConnections.kt`, `AppModels.kt` |
 | Destinos o enum de pantallas | `AppModels.kt` | `MainActivity.kt` |
 | Login, sesion o logout | `Account.kt` | `RemoteConnections.kt`, `MainActivity.kt` |
 | Sincronizacion deportiva | `Account.kt` | `SecureTokenStore.kt`, `MainActivity.kt`, `RemoteConnections.kt` |
@@ -91,20 +93,35 @@ Ultima revision del proyecto: 2026-08-06.
   visualmente la cabecera al cambiar de destino.
 - Solo el contenido central usa `clipToBounds()`; cabecera y barra inferior
   conservan su propia prioridad de dibujo.
-- La cabecera muestra marca y boton de perfil, conserva prioridad de dibujo
+- La cabecera muestra el emblema monocromo entregado por el usuario en
+  `appbike_brand_icon`, el clima local y el boton de perfil original; conserva prioridad de dibujo
   sobre los fondos de las pantallas hijas y debe permanecer visible en los
   cuatro destinos principales.
+- El clima usa la posicion actual del dispositivo mientras la actividad esta
+  iniciada. Se actualiza cada 15 minutos, reintenta un fallo al minuto y espera
+  el permiso de ubicacion sin iniciar solicitudes de red desde Compose.
+- `WeatherStatusChip` muestra temperatura, estado e iconografia propia para sol,
+  noche, nubes, niebla, lluvia, nieve, tormenta y granizo. Es informativo y no
+  responde al toque ni abre enlaces. La atribucion visible `Open-Meteo` no debe
+  retirarse.
 - La barra inferior solo debe contener:
-  - `AppScreen.ROUTES` como "Mapas"
+  - `AppScreen.HOME` como "Inicio"
   - `AppScreen.BIKES`
   - `AppScreen.MARKETPLACE`
   - `AppScreen.CHAT`
+- El contenido central reconoce un gesto horizontal de 72 dp entre los cuatro
+  destinos, en el orden Inicio, Bicicletas, Marketplace y Chat. No aplicar ese
+  gesto al mapa secundario porque interferiria con su desplazamiento.
 - En horizontal, la cabecera usa la firma `APPBIKE   RIDE • CONNECT` en una
   linea y la barra inferior mide 56 dp con iconos de 24 dp sin etiqueta visual.
   Los cuatro iconos deben conservar su `contentDescription` completo.
+- Los cuatro destinos usan una familia vectorial propia y tintable:
+  `ic_nav_home`, `ic_nav_bikes`, `ic_nav_marketplace` e `ic_nav_chat`.
+  Conservan metáforas de inicio, eslabón, intercambio y conexión;
+  no sustituirlos por los iconos Material literales sin revisar la identidad.
 - `ACCOUNT` es flujo secundario accesible desde la cabecera.
-- `HOME`, `SYNC` y `CREATE_PUBLICATION` existen como compatibilidad/alias, pero
-  no son destinos principales activos.
+- `ROUTES` es el mapa secundario accesible desde Novedades; `SYNC` y
+  `CREATE_PUBLICATION` se conservan por compatibilidad.
 - Hay listas semilla de productos/rutas/juntas/mensajes que hoy no alimentan
   las pantallas conectadas; tratarlas como residuo historico, no como fuente de
   datos.
@@ -123,6 +140,8 @@ Contiene modelos simples usados por UI y capa remota:
 - `RideMeetup`
 - `ChatMessage`
 - `GeoPoint`
+- `WeatherCondition`
+- `WeatherSnapshot`
 - `MeetupEvent`
 - `UserChat`
 - `StoredMessage`
@@ -140,6 +159,11 @@ Capa remota centralizada con `HttpURLConnection` y `org.json`.
 
 - JSON POST al `API_URL` para cuenta, bicicletas, mantenciones, Marketplace y
   Juntas regionales.
+- El clima actual usa un GET publico a Open-Meteo mediante
+  `loadCurrentWeather`; nunca adjunta el Bearer de APPbike. El endpoint gratuito
+  directo se reserva para desarrollo/no comercial. Antes de un lanzamiento
+  comercial, enrutarlo por backend o usar el endpoint de cliente contratado sin
+  incluir credenciales del proveedor en el APK.
 - Solo chat conserva endpoints por path pendientes.
 - Errores visibles deben pasar por `RemoteConnections.userFriendlyError`.
 - No hacer llamadas HTTP directamente desde pantallas nuevas si ya existe o
@@ -147,17 +171,30 @@ Capa remota centralizada con `HttpURLConnection` y `org.json`.
 
 ## Flujo de navegacion
 
-1. La app inicia en `AppScreen.ROUTES`, presentado como Mapas.
-2. La barra inferior navega a Mapas, Bicicletas, Marketplace y Chat.
-3. El boton de perfil abre `AppScreen.ACCOUNT`.
-4. `AccountScreen` contiene perfil, login y tarjetas deportivas.
-5. Si no hay sesion, Bicicletas muestra CTA para ir a Cuenta.
-6. Chat requiere sesion y no muestra conversaciones sin cuenta; su estado vacío
+1. Después del logo, una sesion local con nombre se verifica mediante `user.get`
+   en `Dispatchers.IO`. Si backend la acepta abre `AppScreen.HOME`; si no existe
+   o el token fue rechazado/expiró, limpia la sesión y muestra
+   `UnauthenticatedAccessScreen` a pantalla completa, sin cabecera ni barra
+   inferior. Una identidad registrada pero sin nombre abre `AppScreen.ACCOUNT`
+   para completar ese dato. Un timeout o error 5xx no debe cerrar sesión.
+2. Inicio muestra Novedades con historias y un feed combinado de juntas y
+   Marketplace activos. El acceso de mapa abre `AppScreen.ROUTES`.
+3. La barra inferior navega a Inicio, Bicicletas, Marketplace y Chat; tambien se
+   puede cambiar entre ellos mediante desplazamiento horizontal.
+4. El boton de perfil abre `AppScreen.ACCOUNT`.
+5. `AccountScreen` contiene perfil y tarjetas deportivas para una sesion activa.
+   `UnauthenticatedAccessScreen` contiene el login sobre el fondo MTB
+   `auth_mtb_background.png`; un acceso correcto vuelve automaticamente a Inicio
+   y un error permanece en ese formulario.
+6. Si no hay sesion, Bicicletas muestra CTA para ir a Cuenta.
+7. Chat requiere sesion y no muestra conversaciones sin cuenta; su estado vacío
    ofrece un CTA que abre Cuenta.
-7. Al cerrar sesion se limpian bicicletas, mantenciones y reservas en memoria.
+8. Al cerrar sesion se limpian bicicletas, mantenciones y reservas en memoria y
+   se abre Cuenta.
 
-No agregues botones "Volver" a Mapas, Bicicletas, Marketplace o Chat como flujo
-principal. Solo los flujos secundarios internos pueden tener volver/cerrar.
+No agregues botones "Volver" a Inicio, Bicicletas, Marketplace o Chat como flujo
+principal. El mapa se cierra volviendo a Inicio desde la barra inferior; los
+demas flujos secundarios internos pueden tener volver/cerrar.
 
 En Bicicletas, el mensaje central sin sesion debe ser exactamente:
 "Inicia sesión para ver tus bicicletas guardadas". El CTA de inicio de sesion
@@ -183,6 +220,10 @@ Contrato:
   nunca guardar el token en texto ni en `LocalDataStore`.
 - No guardar password.
 - Una sesion numerica o no UUID se considera invalida y se elimina al cargar.
+- Una sesion persistida con UUID se valida una vez al arrancar con `user.get`.
+  Solo `401`, codigos remotos de token o mensajes inequívocos de token/sesion
+  invalida/expirada autorizan limpiar Cuenta y token; errores de conectividad o
+  servidor conservan la sesion y permiten entrar a Inicio.
 - Login envia:
   - `action=login`
   - `usuario`
@@ -193,6 +234,12 @@ Contrato:
 - Login rechaza cualquier identidad devuelta que no sea UUID antes de guardar
   la sesion. En Cuenta sin sesion, el formulario de acceso aparece antes del
   panel promocional para que la accion principal quede visible de inmediato.
+- En la raiz sin sesion, `UnauthenticatedAccessScreen` reemplaza por completo la
+  pantalla de perfil y oculta cabecera/navegacion. Debe mostrar `Iniciar sesión`
+  y `Crear cuenta` sobre el fondo original `auth_mtb_background.png`.
+- El backend desplegado no ofrece aun una accion de registro. `Crear cuenta`
+  explica esa limitacion y no debe inventar endpoints ni enviar credenciales
+  hasta que el contrato de alta segura exista.
 - Una cuenta antigua sin nombre pasa por `user.get` y debe completar
   `user.username.update` antes de depender de su identidad visible.
 
@@ -355,10 +402,26 @@ Estado actual:
 
 - Pantalla Compose con `AndroidView` para `MapView`.
 - Usa MapLibre Native OpenGL.
-- Estilo: `https://tiles.openfreemap.org/styles/liberty`.
+- El boton circular de capas abre un menu compacto con `Mapa`, usando Liberty de
+  OpenFreeMap, y `Satélite`, con World Imagery mas etiquetas de referencia de
+  Esri. Junto a el solo queda visible inicialmente el icono de busqueda.
+- El selector reutiliza el mismo `MapView` y cambia el estilo con `setStyle`;
+  un identificador descarta callbacks tardios. No volver a recrear el
+  `AndroidView` por estilo: en el Samsung podia dejar visible el `SurfaceView`
+  anterior aunque el selector ya hubiese cambiado.
+- El logo textual de MapLibre esta desactivado. El control pequeño de atribucion
+  permanece activo y las fuentes del estilo satelital declaran sus creditos; no
+  eliminar ese acceso informativo.
+- El modo satelital limita la camara a zoom 17, dos niveles antes del maximo 19
+  declarado por las fuentes raster. En Puerto Varas, Esri devuelve teselas
+  grises `Map data not yet available` en 19 y en sectores vecinos de 18 durante
+  zoom anclado; no retirar este margen ni permitir sobrezoom.
 - En el primer ingreso solicita permisos de ubicacion Android.
-- La lectura actual usa `LocationManagerCompat.getCurrentLocation` con
-  `CancellationSignal`; no reintroducir `requestSingleUpdate`.
+- La lectura actual consulta en paralelo GPS, red y proveedor pasivo mediante
+  `LocationManagerCompat.getCurrentLocation` con `CancellationSignal`, elige el
+  punto fresco de menor `accuracy` y solo acepta un ultimo punto conocido con
+  hasta cinco minutos de antiguedad. No reintroducir `requestSingleUpdate` ni
+  volver a aceptar el primer proveedor que responda.
 - La ubicacion obtenida es temporal hasta que el usuario la confirma.
 - Cada confirmacion incrementa su identificador de compromiso. Una respuesta
   tardia de `location.resolve` no puede reemplazar una ubicacion elegida despues.
@@ -368,7 +431,9 @@ Estado actual:
   ingresos siguientes.
 - El marcador de usuario queda anclado a las coordenadas guardadas; mover el
   mapa no cambia ni persiste otra ubicacion.
-- La fila bajo la busqueda muestra la ubicacion actual y permite corregirla.
+- Al tocar la lupa se despliegan sobre el mapa un buscador y la fila de ubicacion
+  con superficies semitransparentes. La fila permite corregir y ofrece `Precisar`
+  para solicitar de nuevo permiso fino y recalcular el GPS.
 - Centro inicial si no hay ubicacion: Santiago.
 - Radio fijo: 40 km.
 - Busqueda filtra localmente la lista regional devuelta por el backend.
@@ -657,7 +722,19 @@ Reglas:
   recursos morado/teal de la plantilla eliminada.
 - La app llama `APPbikeTheme(dynamicColor = false)`.
 - Cabecera usa `statusBarsPadding()` por edge-to-edge.
-- Iconos de navegacion vienen de `material-icons-extended`.
+- El espacio entre marca y perfil contiene `WeatherStatusChip`. El boton de
+  Cuenta conserva 48 dp y el icono anterior `PersonOutline`, con indicador de
+  sesion; ambos mantienen descripciones semanticas completas.
+- Los iconos principales de navegacion son vectores propios bajo `res/drawable`;
+  cada uno mantiene el `contentDescription` completo del destino.
+- `appbike_brand_icon.png` es la copia exacta del PNG monocromo proporcionado el
+  2026-08-12. Es la fuente única para launcher, variante redonda, cabecera y
+  revelado de arranque; no regenerarlo, recolorearlo ni reemplazarlo por la
+  bicicleta/A verde anterior.
+- El splash de plataforma es negro y usa un icono transparente. En arranque
+  frio, `LaunchBrandScreen` anima 40 puntos LED blancos desde las cuatro esquinas
+  durante 2.200 ms, revela el logo en el centro y entra a la app a los 2.550 ms.
+  No mostrar el logo completo antes de esa convergencia.
 - Con `fontScale >= 1.6`, la cabecera usa `RIDE • CONNECT`, la barra inferior
   presenta `Bicis` y `Tienda` manteniendo las descripciones semanticas completas.
 - A escala grande, las tarjetas deportivas usan reflow vertical y reservan

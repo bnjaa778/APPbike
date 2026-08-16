@@ -13,15 +13,42 @@ import android.os.CancellationSignal
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
 import androidx.annotation.RequiresApi
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+internal data class LocationQuality(
+    val accuracyMeters: Float?,
+    val timestampMillis: Long
+)
+
+internal fun compareLocationQuality(first: LocationQuality, second: LocationQuality): Int {
+    val firstAccuracy = first.accuracyMeters
+        ?.takeIf { it.isFinite() && it >= 0f }
+        ?: Float.MAX_VALUE
+    val secondAccuracy = second.accuracyMeters
+        ?.takeIf { it.isFinite() && it >= 0f }
+        ?: Float.MAX_VALUE
+    val accuracyComparison = firstAccuracy.compareTo(secondAccuracy)
+    return if (accuracyComparison != 0) {
+        accuracyComparison
+    } else {
+        second.timestampMillis.compareTo(first.timestampMillis)
+    }
+}
+
 internal object DeviceLocationProvider {
 
-    private const val LOCATION_TIMEOUT_MS = 15_000L
+    private const val GPS_TIMEOUT_MS = 15_000L
+    private const val NETWORK_TIMEOUT_MS = 8_000L
+    private const val PASSIVE_TIMEOUT_MS = 3_000L
+    private const val LAST_KNOWN_MAX_AGE_MS = 5 * 60 * 1_000L
 
     @SuppressLint("MissingPermission")
     suspend fun currentLocation(context: Context): GeoPoint {
@@ -41,11 +68,11 @@ internal object DeviceLocationProvider {
         }
 
         val providers = buildList {
-            if (hasCoarseLocation && manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-                add(LocationManager.NETWORK_PROVIDER)
-            }
             if (hasFineLocation && manager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
                 add(LocationManager.GPS_PROVIDER)
+            }
+            if (hasCoarseLocation && manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                add(LocationManager.NETWORK_PROVIDER)
             }
             if (manager.isProviderEnabled(LocationManager.PASSIVE_PROVIDER)) {
                 add(LocationManager.PASSIVE_PROVIDER)
@@ -56,25 +83,57 @@ internal object DeviceLocationProvider {
             throw IllegalStateException("Activa la ubicación del teléfono para continuar.")
         }
 
-        val lastKnown = providers.mapNotNull { provider ->
-            runCatching { manager.getLastKnownLocation(provider) }.getOrNull()
-        }.maxWithOrNull(
-            compareBy<Location> { it.time }
-                .thenByDescending { it.accuracy }
-        )
-
-        for (provider in providers) {
-            val freshLocation = withTimeoutOrNull(LOCATION_TIMEOUT_MS / providers.size) {
-                requestCurrentLocation(appContext, manager, provider)
-            }
-            if (freshLocation != null) {
-                return freshLocation.toGeoPoint()
-            }
+        val freshLocations = coroutineScope {
+            providers.map { provider ->
+                async {
+                    try {
+                        withTimeoutOrNull(timeoutFor(provider)) {
+                            requestCurrentLocation(appContext, manager, provider)
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+            }.awaitAll().filterNotNull()
         }
 
-        return lastKnown?.toGeoPoint()
+        bestLocation(freshLocations)?.let { return it.toGeoPoint() }
+
+        val now = System.currentTimeMillis()
+        val recentLastKnown = providers.mapNotNull { provider ->
+            runCatching { manager.getLastKnownLocation(provider) }.getOrNull()
+        }.filter { location ->
+            location.time > 0L && now - location.time in 0L..LAST_KNOWN_MAX_AGE_MS
+        }
+
+        return bestLocation(recentLastKnown)?.toGeoPoint()
             ?: throw IllegalStateException("No fue posible obtener una ubicación actual.")
     }
+
+    private fun timeoutFor(provider: String): Long = when (provider) {
+        LocationManager.GPS_PROVIDER -> GPS_TIMEOUT_MS
+        LocationManager.NETWORK_PROVIDER -> NETWORK_TIMEOUT_MS
+        else -> PASSIVE_TIMEOUT_MS
+    }
+
+    private fun bestLocation(locations: List<Location>): Location? = locations
+        .asSequence()
+        .filter { location ->
+            location.latitude in -90.0..90.0 &&
+                location.longitude in -180.0..180.0 &&
+                location.latitude.isFinite() &&
+                location.longitude.isFinite()
+        }
+        .minWithOrNull { first, second ->
+            compareLocationQuality(first.quality(), second.quality())
+        }
+
+    private fun Location.quality() = LocationQuality(
+        accuracyMeters = accuracy.takeIf { hasAccuracy() },
+        timestampMillis = time
+    )
 
     suspend fun searchLocations(
         context: Context,

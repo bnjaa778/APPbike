@@ -41,6 +41,11 @@ región desde coordenadas y aplicar distancia/paginación en PostgreSQL.
 
 La ubicación elegida continúa guardándose solo en `LocalDataStore`; no forma
 parte del perfil remoto. El geocodificador Android entrega sugerencias en vivo.
+La captura automatica del dispositivo prioriza una medicion GPS fina, consulta
+GPS/red/pasivo en paralelo y selecciona el punto fresco con menor radio de
+precision; un punto conocido solo se usa durante cinco minutos. La accion
+`Precisar` permite repetir esa medicion sin alterar la ubicacion persistida hasta
+que el usuario la confirma.
 La app intenta primero `location.search`/`location.reverse`. La comprobacion del
 2026-08-06 confirma resultados normalizados en `location.search`, mientras
 `location.reverse` aun puede responder HTTP 400 `unknown_region` para

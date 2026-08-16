@@ -1,12 +1,19 @@
 # Estado actual de APPbike
 
-Actualizado: 2026-08-11.
+Actualizado: 2026-08-16.
 
 ## Aplicación
 
 - Android nativo con Jetpack Compose, paquete `com.example.appbike`.
 - Entrada: `MainActivity.kt`.
-- Destinos principales: Mapas, Bicicletas, Marketplace y Chat.
+- Destinos principales: Inicio, Bicicletas, Marketplace y Chat.
+- Después del logo, una sesion completa se verifica con `user.get`: si backend
+  la acepta abre Inicio; sin sesion o con token rechazado se limpia la identidad
+  y aparece un acceso MTB a pantalla completa, sin Perfil, cabecera ni barra
+  inferior. Una cuenta válida sin nombre abre Cuenta para completar identidad.
+  Timeouts/5xx no expulsan.
+- Inicio presenta historias y un feed de Novedades con juntas y publicaciones
+  activas; el mapa se abre desde su acceso dedicado.
 - API pública: `https://api.zizzio.cl/APIS/AppBikeExternal.php`.
 - La sesión usa UUID como identidad interna y Bearer token cifrado con Android
   Keystore. `nombre_de_usuario` es únicamente la identidad visible.
@@ -47,10 +54,27 @@ Actualizado: 2026-08-11.
 - Identidad oscura grafito/verde eléctrico con superficies de alto contraste.
 - Campos de texto y búsqueda usan contorno LED verde-azul, con mayor intensidad
   al recibir foco.
-- La barra inferior usa una sola familia de iconos Material tintables para
-  Mapas, Bicicletas, Marketplace y Chat.
-- El icono de lanzamiento es una marca vectorial propia de bicicleta sobre
-  grafito y verde electrico; ya no empaqueta el recurso generico de Android.
+- La barra inferior usa cuatro vectores propios de trazo redondeado: hogar para
+  Inicio, eslabón para Bicicletas, prisma de intercambio para
+  Marketplace y órbita social para Chat. Son tintables y conservan etiquetas
+  semánticas completas.
+- Launcher, variante redonda y cabecera usan la copia exacta del símbolo blanco
+  sobre negro entregado por el usuario en `appbike_brand_icon.png`.
+- El acceso sin sesion usa `auth_mtb_background.png`, una fotografía vertical
+  original de MTB generada para APPBIKE con degradado oscuro legible. Presenta
+  login y `Crear cuenta`; esta ultima explica que el alta remota sigue pendiente
+  y no transmite credenciales a un endpoint inexistente.
+- Entre la marca y Cuenta, la cabecera muestra el clima de la posicion GPS con
+  temperatura, estado e iconos propios para sol/noche, nubes, niebla, lluvia,
+  nieve, tormenta y granizo. Actualiza cada 15 minutos y acredita de forma
+  visible a Open-Meteo. Es solo informativo: tocarlo no ejecuta acciones ni abre
+  paginas externas.
+- Cuenta conserva el icono anterior `PersonOutline`, su indicador verde de
+  sesion, un objetivo tactil de 48 dp y descripcion accesible. El clima mantiene
+  intacto su espacio contiguo.
+- El splash de plataforma queda negro; después `LaunchBrandScreen` anima 40 LED
+  blancos que convergen desde las cuatro esquinas, revela el mismo logo y entra
+  a la interfaz a los 2.550 ms. El logo completo no se adelanta a la animación.
 - Tipografía, radios, espaciado, tarjetas y estados comparten tokens centrales
   en `ui/theme/` y `CommonComponents.kt`.
 - `ui/theme/Color.kt` es la fuente única de color; los recursos morado/teal de
@@ -68,7 +92,9 @@ Actualizado: 2026-08-11.
   sobre cabecera o navegación raíz.
 - En horizontal, la cabecera usa una firma de marca en una línea y la barra
   inferior mide 56 dp con iconos sin etiqueta visual; las descripciones
-  semánticas siguen anunciando Mapas, Bicicletas, Marketplace y Chat.
+  semánticas siguen anunciando Inicio, Bicicletas, Marketplace y Chat.
+- Un gesto horizontal de 72 dp cambia Inicio/Bicicletas/Marketplace/Chat en
+  ambos sentidos; el mapa secundario queda fuera del detector para poder moverse.
 - Cabecera, contenido y navegación son hermanos directos en la raíz. Solo el
   contenido central usa recorte, evitando que MapLibre o los fondos Compose
   oculten barras persistentes durante la navegación horizontal.
@@ -81,7 +107,10 @@ Actualizado: 2026-08-11.
 
 ### Mapas y juntas
 
-- La lectura de ubicacion usa `LocationManagerCompat` y cancelacion real. La
+- La lectura de ubicacion usa `LocationManagerCompat`, cancelacion real y
+  solicitudes paralelas a GPS/red/pasivo; selecciona el punto fresco de mejor
+  precision y descarta posiciones conocidas de mas de cinco minutos. La fila
+  ofrece `Precisar` para repetir la medicion fina. La
   fecha embebida de una junta se separa del cuerpo visible y se reconstruye una
   sola vez al editar.
 - El mapa anuncia en espanol la cantidad de juntas visibles y actualiza su fuente
@@ -89,7 +118,11 @@ Actualizado: 2026-08-11.
   marcador azul, el detalle remoto y la fotografia real.
 - Crear una junta o contactar al organizador sin sesion abre Cuenta.
 
-- MapLibre OpenGL con marcador fijo para la ubicación elegida.
+- MapLibre OpenGL con marcador fijo para la ubicación elegida, boton circular de
+  capas `Mapa`/`Satélite`, cambio de estilo sobre el mismo `MapView`, logo textual
+  oculto y atribucion informativa conservada. La lupa despliega buscador y
+  ubicacion semitransparentes; la camara satelital se detiene en zoom 17 para no
+  entrar a teselas grises que Esri devuelve localmente en zoom 18/19.
 - Solicitud inicial de ubicación, confirmación, corrección manual y sugerencias
   en vivo con Unicode.
 - El primer foco del selector limpia la etiqueta previa; la nueva búsqueda no se
@@ -229,6 +262,10 @@ Actualizado: 2026-08-11.
 - `RemoteConnections` ya evita adjuntar un Bearer a acciones públicas. Mantener
   esa separación al agregar acciones nuevas para que un token vencido no rompa
   Mapas, Marketplace ni login.
+- El clima usa el endpoint gratuito directo de Open-Meteo para desarrollo y uso
+  no comercial. Antes de distribuir APPbike comercialmente, contratar el
+  endpoint de cliente o crear un proxy backend; nunca incrustar la clave en el
+  APK y conservar la atribucion visible.
 - Implementar FCM en backend y Android cuando exista el contrato de tokens.
 
 ## Automatizacion de verificacion

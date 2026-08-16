@@ -8,6 +8,7 @@
 - `LocalDataStore.kt`: ubicación, chats, mensajes y metadata por usuario.
 - `RemoteConnections.kt`: contratos HTTP y parsers.
 - `MapScreen.kt`: mapa, búsqueda, selección y creación de juntas.
+- `HomeScreen.kt`: historias y feed de Novedades con juntas y Marketplace activos.
 - `MarketplaceScreen.kt`: búsqueda, grid, fotos y creación.
 - `ChatScreen.kt`: tabs, listado, conversación y sincronización.
 - `ChatNotifications.kt`: detección global, aviso dentro de la app, canal Android
@@ -22,7 +23,10 @@ directos. El contenido central se recorta para contener MapLibre y los fondos
 decorativos, mientras las barras persistentes conservan prioridad visual. En
 horizontal, la cabecera se compacta en una línea y la navegación usa 56 dp con
 iconos sin etiqueta visual, pero mantiene la semántica completa de los cuatro
-destinos.
+destinos. Esos destinos son Inicio, Bicicletas, Marketplace y Chat. Inicio carga
+Novedades reales, presenta historias y publicaciones en feed y abre Mapas como
+flujo secundario. Un gesto horizontal de 72 dp recorre los cuatro destinos; se
+desactiva en Mapas para conservar el desplazamiento propio de MapLibre.
 
 ## Mapa y juntas regionales
 
@@ -32,19 +36,33 @@ despues de que el mapa queda listo y consulta la capa renderizada; esto protege
 la actualizacion tardia de la fuente GeoJSON. En la validacion real del
 2026-08-06, Osorno mostro el marcador azul, el detalle remoto y su foto Base64.
 
-La pantalla mantiene MapLibre Native OpenGL 13.4.1 con el estilo Liberty de
-OpenFreeMap. La migracion API 37 se valido con la regresion de fuente tardia y
-un render real del mapa tanto en Android 16 como en el AVD `APPbike_API_37`
-Android 17, sin error de carga nativa. El
+La pantalla mantiene MapLibre Native OpenGL 13.4.1. Un boton circular con el
+icono universal de capas abre el menu `Mapa`/`Satélite`; la interfaz inicial deja
+solo ese control y una lupa bajo la cabecera. `Mapa` usa Liberty de OpenFreeMap y
+`Satélite` World Imagery de Esri con una capa de etiquetas de referencia. Cambiar de modo reutiliza el
+mismo `MapView`, aplica `setStyle` sobre el mapa activo, conserva el centro
+vigente y vuelve a instalar las tres fuentes GeoJSON de APPbike. Un identificador
+de solicitud descarta callbacks tardios de estilos anteriores. El logo textual
+de MapLibre esta oculto, pero el control
+pequeño de atribucion sigue activo y cada fuente satelital declara sus creditos.
+La migracion API 37 se valido con la regresion de fuente tardia y un render real
+del mapa tanto en Android 16 como en el AVD `APPbike_API_37` Android 17, sin
+error de carga nativa. El
 marcador verde representa la ubicación local guardada y no se
 mueve al desplazar el mapa. Las juntas con coordenadas válidas usan marcador
 azul y abren su detalle al tocarlas.
 
-Para conservar acceso por teclado alrededor del `AndroidView`, el buscador, la
-fila de ubicación y la acción Crear junta se componen antes del mapa y se dibujan
-por encima con `zIndex(1f)`. El recorrido comprobado mantiene Cuenta, buscador,
-acción Buscar, ubicación actual, Crear junta, mapa y destinos disponibles sin
-perder el campo de texto al atravesar MapLibre.
+Las fuentes raster satelitales anuncian zoom 19, pero en sectores de Puerto
+Varas World Imagery devuelve en ese nivel una tesela gris `Map data not yet
+available`; una tesela puntual conserva imagen en 18, pero el zoom anclado puede
+alcanzar sectores vecinos sin cobertura en ese mismo nivel. Por eso la camara de
+MapLibre se detiene en 17 y no permite sobrezoom hacia niveles problematicos.
+
+Para conservar acceso por teclado alrededor del `AndroidView`, la lupa, capas y
+la acción Crear junta se componen antes del mapa y se dibujan por encima con
+`zIndex(1f)`. Al tocar la lupa aparecen el buscador y la fila de ubicacion sobre
+superficies semitransparentes. El recorrido mantiene Cuenta, lupa, capas,
+buscador expandido, ubicación actual, Crear junta, mapa y destinos disponibles.
 
 El onboarding y la corrección de ubicación no cambian: permisos Android en el
 primer ingreso, confirmación antes de persistir y sugerencias en vivo. La capa
@@ -70,6 +88,12 @@ de 3 s; si no responde o devuelve vacío, la misma búsqueda en vivo usa
 automáticamente Nominatim con límite de 8 s, sin esperar Enter. Al tocar una
 sugerencia se oculta el teclado y se libera el foco antes de guardar y retirar
 el overlay.
+
+La lectura del dispositivo solicita simultaneamente GPS, red y proveedor
+pasivo con la API cancelable de AndroidX. Espera hasta 15 s por GPS, compara los
+puntos frescos por `accuracy` y evita usar posiciones conocidas de mas de cinco
+minutos. La fila de ubicacion incorpora `Precisar`, que vuelve a pedir acceso
+fino cuando falta y repite la medicion antes de la confirmacion del usuario.
 
 Cuando existe una ubicación previa, el primer foco limpia su etiqueta antes de
 aceptar escritura. Así una búsqueda nueva reemplaza el valor anterior en vez de
@@ -146,7 +170,7 @@ Marketplace y permanece visible durante carga, listado y estado vacío.
 El fondo decorativo se recorta a los límites del contenido. Con fuente Android
 al 200 %, búsqueda, ubicación, moneda y navegación conservan jerarquía; los
 nombres largos se eliden sin reducir el tamaño de texto configurado.
-La misma prioridad se verificó navegando Mapas → Bicicletas → Marketplace →
+La misma prioridad se verificó navegando Inicio → Bicicletas → Marketplace →
 Chat en horizontal; el cambio de destino no debe ocultar ni retrasar el repintado
 de la marca o del acceso a Cuenta.
 

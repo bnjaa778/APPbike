@@ -63,6 +63,43 @@ class MapMeetupSourceInstrumentedTest {
         assertEquals("meetup-osorno", feature.getStringProperty("meetup_id"))
     }
 
+    @Test
+    fun satelliteMaximumZoomPreferenceStopsAtSafeLevel() {
+        val mapReference = AtomicReference<MapLibreMap?>()
+
+        compose.setContent {
+            APPbikeTheme(dynamicColor = false) {
+                Box(Modifier.fillMaxSize()) {
+                    OpenStreetMap(
+                        modifier = Modifier.fillMaxSize(),
+                        center = GeoPoint(-41.3195, -72.9854, "Puerto Varas"),
+                        userLocation = GeoPoint(-41.3195, -72.9854, "Puerto Varas"),
+                        meetups = emptyList(),
+                        selectedPoint = null,
+                        creationStep = MeetupCreationStep.CLOSED,
+                        styleDefinition = OFFLINE_STYLE,
+                        maximumZoom = SATELLITE_MAX_CAMERA_ZOOM,
+                        onMapReady = { mapReference.set(it) },
+                        onPointSelected = {},
+                        onMeetupSelected = {},
+                        onMapError = {}
+                    )
+                }
+            }
+        }
+
+        compose.waitUntil(timeoutMillis = 15_000) { mapReference.get() != null }
+        compose.waitUntil(timeoutMillis = 15_000) {
+            onMainThread { mapReference.get()?.maxZoomLevel } == SATELLITE_MAX_CAMERA_ZOOM
+        }
+
+        assertEquals(
+            SATELLITE_MAX_CAMERA_ZOOM,
+            onMainThread { mapReference.get()?.maxZoomLevel ?: Double.NaN },
+            0.0
+        )
+    }
+
     private fun renderedMeetupFeatures(map: MapLibreMap?) = onMainThread {
         map?.let { readyMap ->
             readyMap.queryRenderedFeatures(

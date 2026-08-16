@@ -1,13 +1,13 @@
 # APPbike - Estado tecnico
 
-Revision: 2026-08-06.
+Revision: 2026-08-16.
 
 ## Resumen
 
 APPbike es una app Android nativa en Kotlin/Jetpack Compose. La navegacion
-principal mantiene cuatro destinos: Mapas, Bicicletas, Marketplace y Chat. La
+principal mantiene cuatro destinos: Inicio, Bicicletas, Marketplace y Chat. La
 cuenta, el contenido propio y las conexiones deportivas viven en la pantalla
-secundaria Cuenta.
+secundaria Cuenta; Mapas se abre desde las Novedades de Inicio.
 
 Funcionan contra el backend desplegado:
 
@@ -39,6 +39,17 @@ deportivas. Gestiona el deep link `appbike://oauth/callback` y abre Chat con la
 conversacion creada desde una junta o publicacion. Los datos semilla historicos
 y `SyncScreen.kt` fueron eliminados.
 
+Después del logo, la raiz valida una vez la sesion persistida mediante `user.get`
+en IO. Una cuenta aceptada abre Inicio. Sin datos guardados o cuando backend
+rechaza/expira el token, la identidad se limpia y se muestra un acceso MTB a
+pantalla completa, sin componer Perfil, cabecera ni barra inferior. Una cuenta
+válida que solo carece de `nombre_de_usuario` abre Cuenta para completar ese
+dato. Timeouts y errores 5xx conservan la sesion para no expulsar al rider por
+una caída transitoria.
+`HomeScreen.kt` combina en paralelo juntas y publicaciones activas en historias
+y feed; su acceso de mapa abre `ROUTES`. Un desplazamiento horizontal de 72 dp
+recorre Inicio, Bicicletas, Marketplace y Chat en ambos sentidos.
+
 La identidad grafito/verde electrico se verifico visualmente con fuente Android
 al 130 % y 200 %. A partir de 160 %, cabecera y barra inferior usan copia
 compacta sin perder semantica, las tarjetas deportivas adoptan reflow vertical
@@ -46,18 +57,38 @@ y los estados vacios priorizan el CTA. Los
 fondos decorativos quedan recortados a su pantalla y no pueden cubrir la
 cabecera raiz.
 
+La marca principal es el símbolo monocromo blanco sobre negro entregado por el
+usuario. El mismo PNG alimenta launcher, icono redondo, cabecera y revelado de
+arranque. Antes de componer la app, 40 puntos LED blancos salen de las cuatro
+esquinas, convergen y dan paso al logo central. La barra inferior usa una familia
+vectorial propia basada en ruta, eslabón, intercambio y órbita social, evitando
+los antiguos pictogramas Material literales sin perder semántica accesible.
+
 La raiz usa cabecera, contenido y barra inferior como hermanos directos; solo
 el contenido central se recorta. En horizontal, la marca se compacta en una
 linea y la navegacion pasa a 56 dp con iconos de 24 dp y semantica completa.
 La auditoria real confirmo el reflow en 360 dp horizontal y 540 dp vertical para
-Mapas, Bicicletas, Marketplace, Chat y Cuenta.
+   Inicio, Mapas, Bicicletas, Marketplace, Chat y Cuenta.
+
+La cabecera consulta el clima de la posicion GPS del telefono mientras la
+actividad esta iniciada. Muestra temperatura e iconos Compose propios para los
+codigos WMO de cielo despejado, nubes, niebla, llovizna, lluvia, lluvia helada,
+nieve, tormenta y granizo; actualiza cada 15 minutos y reintenta al minuto si
+falla. El chip acredita de forma visible a Open-Meteo y es solo informativo: no
+responde al toque ni abre paginas externas. El boton
+de perfil conserva el icono anterior `PersonOutline`, su objetivo de 48 dp y el
+indicador de sesion, sin alterar el espacio reservado al clima.
 
 ### Cuenta
 
 `Account.kt` valida IDs UUID y guarda solo identidad no secreta en preferencias.
 `SecureTokenStore.kt` cifra con Android Keystore el token que el backend pueda
-devolver. Sin sesión, el login aparece antes del panel promocional. Los backups
-de nube/transferencia excluyen identidad, token, ubicaciones y cachés de Chat.
+devolver. Sin sesión, `UnauthenticatedAccessScreen` usa el fondo original
+`auth_mtb_background.png` y presenta el formulario de acceso junto a `Crear
+cuenta`; el perfil y la navegación principal no se muestran. El backend todavía
+no publica una acción de alta, por lo que ese segundo CTA informa la limitación
+sin inventar endpoints ni enviar credenciales. Los backups de nube/transferencia
+excluyen identidad, token, ubicaciones y cachés de Chat.
 `ProfileContent.kt` implementa:
 
 - publicaciones propias por estado;
@@ -81,9 +112,12 @@ reintento tras error y valida fechas calendario reales `AAAA-MM-DD`.
 
 ### Ubicacion, mapa y Juntas
 
-`DeviceLocationProvider.kt` obtiene GPS y geocodifica sin limitar la busqueda a
-Chile. `GeoPoint` conserva pais, area administrativa, region y moneda cuando se
-conocen. `LocalDataStore` persiste esos campos y hasta ocho ubicaciones recientes.
+`DeviceLocationProvider.kt` consulta GPS, red y proveedor pasivo en paralelo,
+elige la posicion fresca de mejor precision y rechaza puntos conocidos con mas
+de cinco minutos. La accion `Precisar` permite repetir la solicitud fina.
+Tambien geocodifica sin limitar la busqueda a Chile. `GeoPoint` conserva pais,
+area administrativa, region y moneda cuando se conocen. `LocalDataStore`
+persiste esos campos y hasta ocho ubicaciones recientes.
 
 El selector Compose acepta Unicode, busca tras debounce y evita el ANR causado
 por una ventana `AlertDialog` separada. Al recibir el primer foco limpia una
@@ -93,7 +127,12 @@ usa servicios del dispositivo y un fallback temporal de Nominatim mientras la
 resolucion inversa del backend siga incompleta.
 
 MapLibre representa usuario, juntas y punto seleccionado con fuentes GeoJSON y
-`SymbolLayer`; ya no usa `MarkerOptions` deprecado. El mapa publico muestra solo
+`SymbolLayer`; ya no usa `MarkerOptions` deprecado. Un selector cambia entre
+Liberty de OpenFreeMap y World Imagery de Esri con etiquetas. El logo textual
+de MapLibre queda oculto y el control de atribucion permanece disponible. El
+cambio reutiliza el `MapView`, aplica el estilo al mapa activo y protege sus
+callbacks con un identificador para que un estilo anterior no se reinstale. El
+mapa publico muestra solo
 juntas activas. El historial pasado aparece solo en el perfil del creador. Las
 respuestas antiguas de búsqueda/detalle se descartan; creación bloquea doble
 envío y reporta por separado un fallo de foto después de crear la junta.
@@ -173,6 +212,11 @@ mutaciones comunitarias incluyen `user_id`. Login, descubrimiento publico,
 detalles, fotos y ubicacion publica omiten Bearer para que un token vencido no
 rompa la app; bicicletas, contenido propio, Chat, deportes y mutaciones siguen
 autenticados. El token nunca se envia al geocodificador externo.
+
+`loadCurrentWeather` ejecuta un GET publico sin Bearer a Open-Meteo y convierte
+los codigos WMO a `WeatherCondition`. El endpoint gratuito directo queda
+limitado al uso de desarrollo/no comercial; para produccion comercial debe
+moverse al backend o al endpoint de cliente contratado, sin secretos en el APK.
 
 Los listados envian `lat`, `lng`, `radius_km`, `q`, `limit` y `offset`, paginan
 hasta 500 elementos y conservan filtrado local para compatibilidad. El backend

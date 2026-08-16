@@ -2,6 +2,7 @@ package com.example.appbike
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -37,6 +38,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.MyLocation
 import androidx.compose.material.icons.outlined.Search
@@ -44,12 +48,15 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -91,6 +98,7 @@ import com.example.appbike.ui.theme.AppPrimary
 import com.example.appbike.ui.theme.AppPrimaryBright
 import com.example.appbike.ui.theme.AppSurfaceElevated
 import com.example.appbike.ui.theme.AppTextPrimary
+import androidx.core.content.ContextCompat
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.graphics.createBitmap
@@ -123,6 +131,61 @@ import kotlin.math.roundToInt
 internal enum class MeetupCreationStep { CLOSED, SELECT_LOCATION, FORM }
 private enum class LocationSetupStep { READY, REQUESTING_PERMISSION, LOCATING, CONFIRM, MANUAL }
 private const val OPEN_FREE_MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty"
+private const val STREET_MAX_CAMERA_ZOOM = 20.0
+internal const val SATELLITE_MAX_CAMERA_ZOOM = 17.0
+private const val SATELLITE_MAP_STYLE = """
+    {
+      "version": 8,
+      "name": "APPbike Satelite",
+      "sources": {
+        "esri-world-imagery": {
+          "type": "raster",
+          "tiles": [
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+          ],
+          "tileSize": 256,
+          "minzoom": 0,
+          "maxzoom": 19,
+          "attribution": "Imagenes: Esri, Vantor, Earthstar Geographics y la comunidad GIS"
+        },
+        "esri-world-labels": {
+          "type": "raster",
+          "tiles": [
+            "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
+          ],
+          "tileSize": 256,
+          "minzoom": 0,
+          "maxzoom": 19,
+          "attribution": "Etiquetas: Esri, HERE, Garmin, OpenStreetMap y la comunidad GIS"
+        }
+      },
+      "layers": [
+        {
+          "id": "satellite-background",
+          "type": "background",
+          "paint": { "background-color": "#06100C" }
+        },
+        {
+          "id": "satellite-imagery",
+          "type": "raster",
+          "source": "esri-world-imagery"
+        },
+        {
+          "id": "satellite-labels",
+          "type": "raster",
+          "source": "esri-world-labels"
+        }
+      ]
+    }
+"""
+internal enum class MapStyleMode(
+    val visibleLabel: String,
+    val styleDefinition: String,
+    val maximumCameraZoom: Double
+) {
+    MAPA("Mapa", OPEN_FREE_MAP_STYLE, STREET_MAX_CAMERA_ZOOM),
+    SATELITE("Satélite", SATELLITE_MAP_STYLE, SATELLITE_MAX_CAMERA_ZOOM)
+}
 internal const val LOCATION_SEARCH_PANEL_TEST_TAG = "location_search_panel"
 private const val USER_SOURCE_ID = "appbike-user-source"
 private const val USER_LAYER_ID = "appbike-user-layer"
@@ -157,6 +220,9 @@ fun RoutesScreen(
         )
     }
     var locationSetupMessage by remember { mutableStateOf<String?>(null) }
+    var mapStyleMode by remember { mutableStateOf(MapStyleMode.MAPA) }
+    var searchControlsExpanded by remember { mutableStateOf(false) }
+    var mapStyleMenuExpanded by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -363,44 +429,110 @@ fun RoutesScreen(
     Box(Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
-                .align(Alignment.TopCenter)
+                .align(Alignment.TopStart)
                 .padding(horizontal = 12.dp, vertical = 8.dp)
                 .zIndex(1f),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            SearchField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = if (creationStep == MeetupCreationStep.SELECT_LOCATION) {
-                    "Toca el mapa para marcar el punto"
-                } else {
-                    "Buscar junta"
-                },
-                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                trailingIcon = {
-                    IconButton(onClick = { userLocation?.let(::refresh) }) {
-                        Icon(Icons.Outlined.Search, contentDescription = "Buscar")
-                    }
-                },
-                enabled = creationStep == MeetupCreationStep.CLOSED && userLocation != null,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(
-                    onSearch = { userLocation?.let(::refresh) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MapControlButton(
+                    icon = if (searchControlsExpanded) Icons.Outlined.Close else Icons.Outlined.Search,
+                    contentDescription = if (searchControlsExpanded) {
+                        "Cerrar búsqueda de juntas"
+                    } else {
+                        "Buscar juntas"
+                    },
+                    selected = searchControlsExpanded,
+                    enabled = creationStep == MeetupCreationStep.CLOSED,
+                    onClick = { searchControlsExpanded = !searchControlsExpanded }
                 )
-            )
-
-            CurrentLocationRow(
-                location = displayedLocation,
-                locating = locationSetupStep == LocationSetupStep.LOCATING ||
-                    locationSetupStep == LocationSetupStep.REQUESTING_PERMISSION,
-                enabled = creationStep == MeetupCreationStep.CLOSED &&
-                    locationSetupStep != LocationSetupStep.LOCATING,
-                onClick = {
-                    locationSetupMessage = null
-                    locationSetupStep = LocationSetupStep.MANUAL
+                Box {
+                    MapControlButton(
+                        icon = Icons.Outlined.Layers,
+                        contentDescription = "Capas del mapa: ${mapStyleMode.visibleLabel}",
+                        selected = mapStyleMenuExpanded,
+                        onClick = { mapStyleMenuExpanded = true }
+                    )
+                    DropdownMenu(
+                        expanded = mapStyleMenuExpanded,
+                        onDismissRequest = { mapStyleMenuExpanded = false },
+                        containerColor = AppSurfaceElevated.copy(alpha = 0.94f)
+                    ) {
+                        MapStyleMode.entries.forEach { mode ->
+                            DropdownMenuItem(
+                                text = { Text(mode.visibleLabel) },
+                                leadingIcon = {
+                                    if (mode == mapStyleMode) {
+                                        Icon(Icons.Outlined.Check, contentDescription = null)
+                                    } else {
+                                        Icon(Icons.Outlined.Layers, contentDescription = null)
+                                    }
+                                },
+                                onClick = {
+                                    mapStyleMode = mode
+                                    mapStyleMenuExpanded = false
+                                }
+                            )
+                        }
+                    }
                 }
-            )
+            }
 
+            if (searchControlsExpanded) {
+                SearchField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = "Buscar junta",
+                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                    trailingIcon = {
+                        IconButton(onClick = { userLocation?.let(::refresh) }) {
+                            Icon(Icons.Outlined.Search, contentDescription = "Buscar")
+                        }
+                    },
+                    enabled = userLocation != null,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = AppSurfaceElevated.copy(alpha = 0.78f),
+                        unfocusedContainerColor = AppSurfaceElevated.copy(alpha = 0.72f),
+                        disabledContainerColor = AppSurfaceElevated.copy(alpha = 0.58f),
+                        focusedTextColor = AppTextPrimary,
+                        unfocusedTextColor = AppTextPrimary,
+                        focusedBorderColor = AppPrimaryBright.copy(alpha = 0.78f),
+                        unfocusedBorderColor = AppBorderSubtle,
+                        cursorColor = AppPrimaryBright
+                    ),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(
+                        onSearch = { userLocation?.let(::refresh) }
+                    )
+                )
+
+                CurrentLocationRow(
+                    location = displayedLocation,
+                    locating = locationSetupStep == LocationSetupStep.LOCATING ||
+                        locationSetupStep == LocationSetupStep.REQUESTING_PERMISSION,
+                    enabled = locationSetupStep != LocationSetupStep.LOCATING,
+                    onLocate = {
+                        val hasFineLocation = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.ACCESS_FINE_LOCATION
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (hasFineLocation) {
+                            locateDevice()
+                        } else {
+                            locationPermissionLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.ACCESS_FINE_LOCATION,
+                                    Manifest.permission.ACCESS_COARSE_LOCATION
+                                )
+                            )
+                        }
+                    },
+                    onClick = {
+                        locationSetupMessage = null
+                        locationSetupStep = LocationSetupStep.MANUAL
+                    }
+                )
+            }
         }
 
         if (creationStep == MeetupCreationStep.SELECT_LOCATION) {
@@ -466,6 +598,8 @@ fun RoutesScreen(
             meetups = meetups.toList(),
             selectedPoint = selectedPoint,
             creationStep = creationStep,
+            styleDefinition = mapStyleMode.styleDefinition,
+            maximumZoom = mapStyleMode.maximumCameraZoom,
             onMapReady = {},
             onPointSelected = { selectedPoint = it },
             onMeetupSelected = ::openMeetup,
@@ -476,7 +610,9 @@ fun RoutesScreen(
 
         if (isLoading) {
             Surface(
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 132.dp),
+                modifier = Modifier.align(Alignment.TopCenter).padding(
+                    top = if (searchControlsExpanded) 160.dp else 68.dp
+                ),
                 shape = CircleShape,
                 color = AppBackgroundElevated,
                 border = androidx.compose.foundation.BorderStroke(1.dp, AppBorderSubtle),
@@ -495,7 +631,11 @@ fun RoutesScreen(
                 message = it,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 136.dp, start = 24.dp, end = 24.dp)
+                    .padding(
+                        top = if (searchControlsExpanded) 164.dp else 72.dp,
+                        start = 24.dp,
+                        end = 24.dp
+                    )
             )
         }
 
@@ -630,6 +770,7 @@ internal fun OpenStreetMap(
     selectedPoint: GeoPoint?,
     creationStep: MeetupCreationStep,
     styleDefinition: String = OPEN_FREE_MAP_STYLE,
+    maximumZoom: Double = STREET_MAX_CAMERA_ZOOM,
     onMapReady: (MapLibreMap) -> Unit,
     onPointSelected: (GeoPoint) -> Unit,
     onMeetupSelected: (MeetupEvent) -> Unit,
@@ -644,7 +785,6 @@ internal fun OpenStreetMap(
     val currentMeetups = rememberUpdatedState(meetups)
     val currentOnMeetupSelected = rememberUpdatedState(onMeetupSelected)
     val currentOnMapError = rememberUpdatedState(onMapError)
-    var map by remember { mutableStateOf<MapLibreMap?>(null) }
     val selectedIcon = remember(context) { createSelectedPointIcon(context) }
     val userLocationIcon = remember(context) { createUserLocationIcon(context) }
     val meetupIcon = remember(context) { createMeetupIcon(context) }
@@ -652,6 +792,9 @@ internal fun OpenStreetMap(
         MapLibre.getInstance(context.applicationContext)
         MapView(context).apply { onCreate(null) }
     }
+    var map by remember { mutableStateOf<MapLibreMap?>(null) }
+    var loadedStyleDefinition by remember { mutableStateOf<String?>(null) }
+    var styleRequestId by remember { mutableIntStateOf(0) }
 
     DisposableEffect(mapView, lifecycleOwner) {
         var started = false
@@ -697,6 +840,14 @@ internal fun OpenStreetMap(
 
         if (lifecycleOwner != null) {
             lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
+            if (!started && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                mapView.onStart()
+                started = true
+            }
+            if (!resumed && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                mapView.onResume()
+                resumed = true
+            }
         } else {
             mapView.onStart()
             mapView.onResume()
@@ -736,32 +887,15 @@ internal fun OpenStreetMap(
             clickListener = newClickListener
             readyMap.addOnMapClickListener(newClickListener)
             readyMap.uiSettings.isCompassEnabled = false
+            readyMap.uiSettings.isLogoEnabled = false
+            readyMap.uiSettings.isAttributionEnabled = true
             readyMap.uiSettings.isZoomGesturesEnabled = true
             readyMap.uiSettings.isScrollGesturesEnabled = true
             readyMap.cameraPosition = CameraPosition.Builder()
                 .target(currentCenter.value.toLatLng())
                 .zoom(13.0)
                 .build()
-            val styleCallback = Style.OnStyleLoaded { style ->
-                if (!destroyed) {
-                    style.addImage(USER_ICON_ID, userLocationIcon)
-                    style.addImage(MEETUP_ICON_ID, meetupIcon)
-                    style.addImage(SELECTED_ICON_ID, selectedIcon)
-                    style.addSource(GeoJsonSource(USER_SOURCE_ID, emptyFeatureCollection()))
-                    style.addSource(GeoJsonSource(MEETUP_SOURCE_ID, emptyFeatureCollection()))
-                    style.addSource(GeoJsonSource(SELECTED_SOURCE_ID, emptyFeatureCollection()))
-                    style.addLayer(symbolLayer(USER_LAYER_ID, USER_SOURCE_ID, USER_ICON_ID))
-                    style.addLayer(symbolLayer(MEETUP_LAYER_ID, MEETUP_SOURCE_ID, MEETUP_ICON_ID))
-                    style.addLayer(symbolLayer(SELECTED_LAYER_ID, SELECTED_SOURCE_ID, SELECTED_ICON_ID))
-                    map = readyMap
-                    currentOnMapReady.value(readyMap)
-                }
-            }
-            if (styleDefinition.trimStart().startsWith("{")) {
-                readyMap.setStyle(Style.Builder().fromJson(styleDefinition), styleCallback)
-            } else {
-                readyMap.setStyle(styleDefinition, styleCallback)
-            }
+            map = readyMap
         }
 
         val failureListener = MapView.OnDidFailLoadingMapListener {
@@ -776,8 +910,39 @@ internal fun OpenStreetMap(
             mapView.removeOnDidFailLoadingMapListener(failureListener)
             lifecycleOwner?.lifecycle?.removeObserver(lifecycleObserver)
             map = null
+            loadedStyleDefinition = null
             destroyMapView()
         }
+    }
+
+    LaunchedEffect(map, styleDefinition) {
+        val readyMap = map ?: return@LaunchedEffect
+        val requestId = styleRequestId + 1
+        styleRequestId = requestId
+        loadedStyleDefinition = null
+        val styleCallback = Style.OnStyleLoaded { style ->
+            if (requestId != styleRequestId || map !== readyMap) return@OnStyleLoaded
+            style.addImage(USER_ICON_ID, userLocationIcon)
+            style.addImage(MEETUP_ICON_ID, meetupIcon)
+            style.addImage(SELECTED_ICON_ID, selectedIcon)
+            style.addSource(GeoJsonSource(USER_SOURCE_ID, emptyFeatureCollection()))
+            style.addSource(GeoJsonSource(MEETUP_SOURCE_ID, emptyFeatureCollection()))
+            style.addSource(GeoJsonSource(SELECTED_SOURCE_ID, emptyFeatureCollection()))
+            style.addLayer(symbolLayer(USER_LAYER_ID, USER_SOURCE_ID, USER_ICON_ID))
+            style.addLayer(symbolLayer(MEETUP_LAYER_ID, MEETUP_SOURCE_ID, MEETUP_ICON_ID))
+            style.addLayer(symbolLayer(SELECTED_LAYER_ID, SELECTED_SOURCE_ID, SELECTED_ICON_ID))
+            loadedStyleDefinition = styleDefinition
+            currentOnMapReady.value(readyMap)
+        }
+        if (styleDefinition.trimStart().startsWith("{")) {
+            readyMap.setStyle(Style.Builder().fromJson(styleDefinition), styleCallback)
+        } else {
+            readyMap.setStyle(styleDefinition, styleCallback)
+        }
+    }
+
+    LaunchedEffect(map, maximumZoom) {
+        map?.setMaxZoomPreference(maximumZoom)
     }
 
     LaunchedEffect(map, center) {
@@ -786,8 +951,9 @@ internal fun OpenStreetMap(
         )
     }
 
-    LaunchedEffect(map, userLocation, meetups, selectedPoint) {
+    LaunchedEffect(map, loadedStyleDefinition, userLocation, meetups, selectedPoint) {
         val readyMap = map ?: return@LaunchedEffect
+        if (loadedStyleDefinition == null) return@LaunchedEffect
         val style = readyMap.style ?: return@LaunchedEffect
         style.getSourceAs<GeoJsonSource>(USER_SOURCE_ID)?.setGeoJson(
             featureCollection(userLocation?.let { pointFeature(it) })
@@ -812,10 +978,15 @@ internal fun OpenStreetMap(
     AndroidView(
         factory = { mapView },
         update = { view ->
+            val mapType = if (styleDefinition == SATELLITE_MAP_STYLE) {
+                "Mapa satelital"
+            } else {
+                "Mapa de calles"
+            }
             view.contentDescription = when (meetups.size) {
-                0 -> "Mapa. No hay juntas cercanas visibles"
-                1 -> "Mapa. 1 junta cercana visible"
-                else -> "Mapa. ${meetups.size} juntas cercanas visibles"
+                0 -> "$mapType. No hay juntas cercanas visibles"
+                1 -> "$mapType. 1 junta cercana visible"
+                else -> "$mapType. ${meetups.size} juntas cercanas visibles"
             }
         },
         modifier = modifier
@@ -887,6 +1058,7 @@ private fun CurrentLocationRow(
     location: GeoPoint?,
     locating: Boolean,
     enabled: Boolean,
+    onLocate: () -> Unit,
     onClick: () -> Unit
 ) {
     Surface(
@@ -894,7 +1066,7 @@ private fun CurrentLocationRow(
             .fillMaxWidth()
             .clickable(enabled = enabled, onClick = onClick),
         shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.74f)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -922,6 +1094,49 @@ private fun CurrentLocationRow(
                 style = MaterialTheme.typography.labelLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
+            )
+            TextButton(
+                enabled = enabled && !locating,
+                onClick = onLocate
+            ) {
+                Icon(
+                    Icons.Outlined.MyLocation,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text("Precisar", modifier = Modifier.padding(start = 4.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun MapControlButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    selected: Boolean,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.size(48.dp),
+        shape = CircleShape,
+        color = if (selected) {
+            AppPrimary.copy(alpha = 0.72f)
+        } else {
+            AppSurfaceElevated.copy(alpha = 0.72f)
+        },
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) AppPrimaryBright.copy(alpha = 0.78f) else AppBorderSubtle
+        ),
+        shadowElevation = 3.dp
+    ) {
+        IconButton(onClick = onClick, enabled = enabled) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = if (enabled) AppTextPrimary else AppTextPrimary.copy(alpha = 0.42f)
             )
         }
     }

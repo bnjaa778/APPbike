@@ -98,6 +98,64 @@ data class GeoPoint(
     val currencyCode: String = ""
 )
 
+enum class WeatherCondition {
+    CLEAR,
+    PARTLY_CLOUDY,
+    CLOUDY,
+    FOG,
+    DRIZZLE,
+    RAIN,
+    FREEZING_RAIN,
+    SNOW,
+    THUNDERSTORM,
+    HAIL,
+    UNKNOWN
+}
+
+data class WeatherSnapshot(
+    val temperatureCelsius: Double,
+    val apparentTemperatureCelsius: Double?,
+    val weatherCode: Int,
+    val condition: WeatherCondition,
+    val isDay: Boolean,
+    val cloudCoverPercent: Int,
+    val precipitationMillimeters: Double,
+    val observedAt: String,
+    val latitude: Double,
+    val longitude: Double
+)
+
+internal fun weatherConditionForWmoCode(code: Int): WeatherCondition = when (code) {
+    0 -> WeatherCondition.CLEAR
+    1, 2 -> WeatherCondition.PARTLY_CLOUDY
+    3 -> WeatherCondition.CLOUDY
+    45, 48 -> WeatherCondition.FOG
+    51, 53, 55 -> WeatherCondition.DRIZZLE
+    56, 57, 66, 67 -> WeatherCondition.FREEZING_RAIN
+    61, 63, 65, 80, 81, 82 -> WeatherCondition.RAIN
+    71, 73, 75, 77, 85, 86 -> WeatherCondition.SNOW
+    95 -> WeatherCondition.THUNDERSTORM
+    96, 99 -> WeatherCondition.HAIL
+    else -> WeatherCondition.UNKNOWN
+}
+
+internal fun weatherConditionLabel(
+    condition: WeatherCondition,
+    isDay: Boolean
+): String = when (condition) {
+    WeatherCondition.CLEAR -> if (isDay) "Despejado" else "Noche clara"
+    WeatherCondition.PARTLY_CLOUDY -> "Parcialmente nublado"
+    WeatherCondition.CLOUDY -> "Nublado"
+    WeatherCondition.FOG -> "Niebla"
+    WeatherCondition.DRIZZLE -> "Llovizna"
+    WeatherCondition.RAIN -> "Lluvia"
+    WeatherCondition.FREEZING_RAIN -> "Lluvia helada"
+    WeatherCondition.SNOW -> "Nieve"
+    WeatherCondition.THUNDERSTORM -> "Tormenta"
+    WeatherCondition.HAIL -> "Tormenta con granizo"
+    WeatherCondition.UNKNOWN -> "Tiempo actual"
+}
+
 data class MeetupEvent(
     val id: String,
     val title: String,

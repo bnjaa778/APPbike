@@ -445,6 +445,7 @@ fun SearchField(
     trailingIcon: @Composable (() -> Unit)? = null,
     enabled: Boolean = true,
     singleLine: Boolean = true,
+    colors: TextFieldColors = appBikeTextFieldColors(),
     keyboardOptions: androidx.compose.foundation.text.KeyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default,
     keyboardActions: androidx.compose.foundation.text.KeyboardActions = androidx.compose.foundation.text.KeyboardActions.Default
 ) {
@@ -471,7 +472,7 @@ fun SearchField(
         enabled = enabled,
         singleLine = singleLine,
         shape = RoundedCornerShape(AppDimens.RadiusLarge),
-        colors = appBikeTextFieldColors(),
+        colors = colors,
         keyboardOptions = keyboardOptions,
         keyboardActions = keyboardActions
     )
