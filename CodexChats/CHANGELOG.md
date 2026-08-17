@@ -1888,3 +1888,37 @@ Siguiente paso:
 
 - Revisar el workflow de GitHub Actions asociado a la rama si se desea generar
   un nuevo artefacto CI.
+
+## 2026-08-16 - Publicacion de APPbike en la rama principal
+
+Objetivo:
+
+- Mostrar la version Android actual de APPbike en la rama `master` del
+  repositorio `bnjaa778/APPbike`, exactamente en el destino indicado por el
+  usuario.
+
+Archivos y decisiones:
+
+- No se modifico codigo Android: el arbol de trabajo ya estaba limpio y la
+  entrega completa estaba publicada en `redesign/purple-dark-ui`.
+- `origin/master` era antepasado directo de la version actual y estaba 13
+  commits atras; se eligio un avance rapido, sin rebase, force-push ni perdida
+  de historial.
+- `local.properties` continuo ignorado y no se publico configuracion local.
+
+Pruebas:
+
+- `git fetch origin --prune`: correcto.
+- `git rev-list --left-right --count origin/master...HEAD`: `0 13`.
+- `git merge-base --is-ancestor origin/master HEAD`: correcto.
+- `git push origin HEAD:master`: correcto; `origin/master` avanzo de
+  `1de4f4b` a `cfa60db`.
+
+Pendientes:
+
+- Ninguno para la publicacion solicitada.
+
+Siguiente paso:
+
+- Confirmar el workflow de GitHub Actions de `master` y usar su APK debug si se
+  desea una instalacion obtenida directamente desde GitHub.
