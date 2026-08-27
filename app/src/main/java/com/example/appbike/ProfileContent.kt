@@ -7,8 +7,11 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -41,6 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
+import com.example.appbike.ui.theme.AppPrimaryBright
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
@@ -54,11 +58,20 @@ private val PROFILE_MARKETPLACE_STATUSES = listOf(
 )
 
 @Composable
-internal fun ProfileContentSection(account: AccountSession) {
+internal fun ProfileContentSection(
+    account: AccountSession,
+    isActive: Boolean = true,
+    onSocialPostCountChanged: (Int) -> Unit = {}
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val publications = remember(account.userId) { mutableStateListOf<ProductPublication>() }
     val meetups = remember(account.userId) { mutableStateListOf<MeetupEvent>() }
+    val socialPosts = remember(account.userId) {
+        mutableStateListOf<SocialPost>().apply {
+            addAll(LocalDataStore.loadSocialPosts(context, account.userId))
+        }
+    }
     var publicationStatus by remember(account.userId) { mutableStateOf("activa") }
     var meetupStatus by remember(account.userId) { mutableStateOf("activa") }
     var selectedPublication by remember(account.userId) {
@@ -67,6 +80,12 @@ internal fun ProfileContentSection(account: AccountSession) {
     var selectedMeetup by remember(account.userId) { mutableStateOf<MeetupEvent?>(null) }
     var loading by remember(account.userId) { mutableStateOf(false) }
     var error by remember(account.userId) { mutableStateOf<String?>(null) }
+    var hasLoaded by remember(account.userId) { mutableStateOf(false) }
+    var showSocialComposer by remember(account.userId) { mutableStateOf(false) }
+
+    LaunchedEffect(socialPosts.size) {
+        onSocialPostCountChanged(socialPosts.size)
+    }
 
     suspend fun reload() {
         try {
@@ -105,18 +124,53 @@ internal fun ProfileContentSection(account: AccountSession) {
                 .takeIf(String::isNotBlank)
         } finally {
             loading = false
+            hasLoaded = true
         }
     }
 
-    LaunchedEffect(account.userId) { reload() }
+    LaunchedEffect(account.userId, isActive) {
+        if (isActive && !hasLoaded) reload()
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Tu actividad", style = MaterialTheme.typography.titleLarge)
+        Text("Tu contenido", style = MaterialTheme.typography.titleLarge)
         Text(
-            "Administra tus publicaciones y revisa las juntas que has creado.",
+            "Comparte experiencias con riders y administra tus espacios de Marketplace.",
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        if (loading) CircularProgressIndicator()
+        Text("Publicaciones sociales", fontWeight = FontWeight.Bold)
+        Text(
+            "Fotos, videos y aventuras personales. Se guardan en este dispositivo hasta que el backend social esté disponible.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Button(
+            modifier = Modifier.fillMaxWidth(),
+            onClick = { showSocialComposer = true }
+        ) {
+            Icon(Icons.Outlined.PhotoCamera, contentDescription = null)
+            Spacer(Modifier.size(8.dp))
+            Text("Publicar una experiencia")
+        }
+        if (socialPosts.isEmpty()) {
+            Text(
+                "Aún no has compartido una experiencia.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            socialPosts.forEach { post ->
+                SocialPostItemCard(
+                    title = post.caption.ifBlank { "Experiencia de ${post.username}" },
+                    detail = if (post.mediaType == "video") "Video personal" else "Foto personal",
+                    status = "Publicado en tu perfil"
+                )
+            }
+        }
+
+        Text("Ventas en Marketplace", fontWeight = FontWeight.Bold)
+        if (loading) {
+            AppSkeleton(Modifier.fillMaxWidth().height(96.dp))
+        }
         error?.let {
             ErrorBanner(it)
             TextButton(onClick = { scope.launch { reload() } }, enabled = !loading) {
@@ -218,6 +272,106 @@ internal fun ProfileContentSection(account: AccountSession) {
             }
         )
     }
+    if (showSocialComposer) {
+        SocialPostComposerDialog(
+            account = account,
+            onDismiss = { showSocialComposer = false },
+            onSaved = { post ->
+                LocalDataStore.saveSocialPost(context, post)
+                socialPosts.removeAll { it.id == post.id }
+                socialPosts.add(0, post)
+                showSocialComposer = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun SocialPostComposerDialog(
+    account: AccountSession,
+    onDismiss: () -> Unit,
+    onSaved: (SocialPost) -> Unit
+) {
+    val context = LocalContext.current
+    var mediaUri by remember { mutableStateOf("") }
+    var mediaType by remember { mutableStateOf("photo") }
+    var caption by remember { mutableStateOf("") }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+        mediaUri = uri.toString()
+        mediaType = if (context.contentResolver.getType(uri)?.startsWith("video/") == true) {
+            "video"
+        } else {
+            "photo"
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Nueva experiencia") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Comparte una foto o video de tu última salida.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = caption,
+                    onValueChange = { caption = it.take(280) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .appBikeTextFieldGlow(),
+                    label = { Text("¿Qué quieres contar?") },
+                    minLines = 3,
+                    maxLines = 5,
+                    colors = appBikeTextFieldColors(),
+                    shape = RoundedCornerShape(14.dp)
+                )
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        picker.launch(arrayOf("image/*", "video/*"))
+                    }
+                ) {
+                    Icon(Icons.Outlined.PhotoCamera, contentDescription = null)
+                    Spacer(Modifier.size(8.dp))
+                    Text(if (mediaUri.isBlank()) "Añadir foto o video" else "Cambiar multimedia")
+                }
+                if (mediaUri.isNotBlank()) {
+                    Text(
+                        if (mediaType == "video") "Video listo para publicar" else "Foto lista para publicar",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppPrimaryBright
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = mediaUri.isNotBlank(),
+                onClick = {
+                    onSaved(
+                        SocialPost(
+                            id = "${account.userId}-${System.currentTimeMillis()}",
+                            userId = account.userId,
+                            username = account.username ?: account.email.substringBefore('@'),
+                            caption = caption.trim(),
+                            mediaUri = mediaUri,
+                            mediaType = mediaType,
+                            createdAt = System.currentTimeMillis()
+                        )
+                    )
+                }
+            ) { Text("Publicar") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
+    )
 }
 
 @Composable
@@ -236,6 +390,25 @@ private fun ProfileItemCard(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(title.ifBlank { "Sin título" }, fontWeight = FontWeight.Bold)
             if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.bodySmall)
+            Text(status, color = MaterialTheme.colorScheme.primary)
+        }
+    }
+}
+
+@Composable
+private fun SocialPostItemCard(
+    title: String,
+    detail: String,
+    status: String
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title.ifBlank { "Experiencia personal" }, fontWeight = FontWeight.Bold)
+            Text(detail, style = MaterialTheme.typography.bodySmall)
             Text(status, color = MaterialTheme.colorScheme.primary)
         }
     }

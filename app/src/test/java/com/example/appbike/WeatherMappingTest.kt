@@ -48,4 +48,5 @@ class WeatherMappingTest {
         assertEquals(-41.33, weather.latitude, 0.001)
         assertEquals(-72.97, weather.longitude, 0.001)
     }
+
 }

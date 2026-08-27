@@ -1,13 +1,13 @@
 # APPbike - Estado tecnico
 
-Revision: 2026-08-16.
+Revision: 2026-08-26.
 
 ## Resumen
 
 APPbike es una app Android nativa en Kotlin/Jetpack Compose. La navegacion
-principal mantiene cuatro destinos: Inicio, Bicicletas, Marketplace y Chat. La
-cuenta, el contenido propio y las conexiones deportivas viven en la pantalla
-secundaria Cuenta; Mapas se abre desde las Novedades de Inicio.
+principal mantiene cinco destinos: Inicio, Marketplace, Mapa, Chat y Perfil.
+`Mi garaje` conserva Bicicletas como flujo secundario desde Perfil; contenido
+propio y conexiones deportivas viven en ese destino principal.
 
 Funcionan contra el backend desplegado:
 
@@ -46,23 +46,25 @@ pantalla completa, sin componer Perfil, cabecera ni barra inferior. Una cuenta
 válida que solo carece de `nombre_de_usuario` abre Cuenta para completar ese
 dato. Timeouts y errores 5xx conservan la sesion para no expulsar al rider por
 una caída transitoria.
-`HomeScreen.kt` combina en paralelo juntas y publicaciones activas en historias
-y feed; su acceso de mapa abre `ROUTES`. Un desplazamiento horizontal de 72 dp
-recorre Inicio, Bicicletas, Marketplace y Chat en ambos sentidos.
+`HomeScreen.kt` consulta Juntas activas y posts sociales locales en un feed
+comunitario con un hero de cuatro fotografías que rota cada 4 segundos. No
+consulta ni muestra Marketplace. Un `HorizontalPager` recorre Inicio, Marketplace,
+Mapa, Chat y Perfil; mantiene las cinco paginas compuestas para conservar scroll,
+busqueda, filtros y seleccion, pero las cargas iniciales se activan solo al hacer
+visible su pantalla. Abrir `Mi garaje` no desmonta el pager.
 
 La identidad grafito/verde electrico se verifico visualmente con fuente Android
 al 130 % y 200 %. A partir de 160 %, cabecera y barra inferior usan copia
-compacta sin perder semantica, las tarjetas deportivas adoptan reflow vertical
-y los estados vacios priorizan el CTA. Los
+compacta sin perder semantica, la barra solo rotula el destino activo, las
+tarjetas deportivas adoptan reflow vertical y los estados vacios priorizan el CTA. Los
 fondos decorativos quedan recortados a su pantalla y no pueden cubrir la
 cabecera raiz.
 
 La marca principal es el símbolo monocromo blanco sobre negro entregado por el
-usuario. El mismo PNG alimenta launcher, icono redondo, cabecera y revelado de
-arranque. Antes de componer la app, 40 puntos LED blancos salen de las cuatro
-esquinas, convergen y dan paso al logo central. La barra inferior usa una familia
-vectorial propia basada en ruta, eslabón, intercambio y órbita social, evitando
-los antiguos pictogramas Material literales sin perder semántica accesible.
+usuario. El mismo PNG alimenta launcher, icono redondo, cabecera y arranque. El
+splash mantiene el logo central a tamaño constante y aplica fade-out. La barra
+inferior usa una unica familia Material Outlined, con Mapa enfatizado y nombres
+accesibles completos; Perfil no se duplica en la cabecera.
 
 La raiz usa cabecera, contenido y barra inferior como hermanos directos; solo
 el contenido central se recorta. En horizontal, la marca se compacta en una
@@ -74,10 +76,10 @@ La cabecera consulta el clima de la posicion GPS del telefono mientras la
 actividad esta iniciada. Muestra temperatura e iconos Compose propios para los
 codigos WMO de cielo despejado, nubes, niebla, llovizna, lluvia, lluvia helada,
 nieve, tormenta y granizo; actualiza cada 15 minutos y reintenta al minuto si
-falla. El chip acredita de forma visible a Open-Meteo y es solo informativo: no
-responde al toque ni abre paginas externas. El boton
-de perfil conserva el icono anterior `PersonOutline`, su objetivo de 48 dp y el
-indicador de sesion, sin alterar el espacio reservado al clima.
+falla. El chip acredita de forma visible a Open-Meteo y, al tocarlo, abre dentro
+de la cabecera un panel desplegable animado con el pronostico de seis dias; no
+abre paginas externas. La cabecera no duplica el acceso a Perfil; ese destino
+vive exclusivamente en la barra inferior.
 
 ### Cuenta
 
@@ -95,11 +97,18 @@ excluyen identidad, token, ubicaciones y cachés de Chat.
 - juntas propias actuales y anteriores;
 - detalle, edicion, fotos, estado/completar y eliminacion.
 
-Las conexiones Strava/Garmin/Wahoo estan detenidas por decision de producto.
-Cuenta muestra tarjetas informativas con cinta `PROXIMAMENTE`, sin botones ni
+El perfil ahora incorpora foto y bio editables por cuenta, además de un
+compositor local de publicaciones sociales con foto o video. Esas publicaciones
+se guardan aisladas por `userId`, aparecen en el perfil y se integran al feed al
+volver a Inicio. El backend social aún no existe, por lo que no se presentan
+como sincronizadas entre dispositivos.
+
+Perfil prioriza identidad, `Mi garaje`, métricas honestas y contenido propio. Las
+métricas sin contrato remoto se muestran sin números inventados. Las conexiones
+Strava/Garmin/Wahoo estan detenidas por decision de producto y aparecen despues
+de la actividad como tarjetas informativas con cinta `PROXIMAMENTE`, sin botones ni
 llamadas OAuth. Los clientes remotos se conservan para una reactivacion futura.
-La seccion aparece antes de `Tu actividad`, manteniendo las tres plataformas
-como un bloque continuo antes del contenido propio.
+Las tres plataformas permanecen como un bloque continuo.
 Los rótulos estáticos con apariencia de pestaña fueron retirados de Cuenta. La
 marca y cada plataforma deportiva se agrupan en un único anuncio semántico.
 
@@ -139,6 +148,17 @@ envío y reporta por separado un fallo de foto después de crear la junta.
 La resolución de ubicación también usa un identificador de compromiso para que
 una respuesta remota tardía no deshaga una corrección posterior del usuario.
 
+Mapa es ahora el destino central del pager. Su `MapView` usa TextureView, se
+instancia al primer ingreso y baja a 4 FPS fuera de pantalla. `Trayecto` es una
+acción independiente de `Junta`: el usuario elige cualquier destino, APPbike
+calcula un camino para bicicleta por calles mediante FOSSGIS/OSRM, marca el
+destino, encuadra la geometria y muestra distancia/ETA del ruteador. El flujo no
+requiere cuenta. Una respuesta tardia se descarta y el cálculo puede cancelarse.
+Si el demo no responde se muestra una linea directa declarada como respaldo.
+El detalle de Junta reutiliza el planificador desde `Cómo llegar` sin mezclar
+ambas funciones; participantes, dificultad, desnivel y tipo de ciclismo quedan
+pendientes del contrato remoto.
+
 El `MapView` anuncia en espanol la cantidad de juntas visibles. Crear una junta
 o contactar a su organizador sin sesion abre Cuenta desde la navegacion raiz.
 La ubicacion actual usa la API cancelable compatible de AndroidX. La fecha de una
@@ -154,7 +174,8 @@ Sin portada, el detalle usa un placeholder de 180 dp; con foto conserva el hero
 de 340 dp.
 
 Marketplace conserva una ubicacion independiente de Juntas, radio de 40 km,
-busqueda y carga visible minima de 450 ms. El formulario:
+busqueda, filtros locales por categoria, estado de grilla y carga visible minima
+de 450 ms. El formulario:
 
 - restringe producto a nuevo/usado/reacondicionado;
 - muestra prefijo monetario fijo;
@@ -213,10 +234,11 @@ detalles, fotos y ubicacion publica omiten Bearer para que un token vencido no
 rompa la app; bicicletas, contenido propio, Chat, deportes y mutaciones siguen
 autenticados. El token nunca se envia al geocodificador externo.
 
-`loadCurrentWeather` ejecuta un GET publico sin Bearer a Open-Meteo y convierte
-los codigos WMO a `WeatherCondition`. El endpoint gratuito directo queda
-limitado al uso de desarrollo/no comercial; para produccion comercial debe
-moverse al backend o al endpoint de cliente contratado, sin secretos en el APK.
+`loadCurrentWeather` y `loadWeatherForecast` ejecutan GET publicos sin Bearer a
+Open-Meteo y convierten los codigos WMO a `WeatherCondition`. El endpoint
+gratuito directo queda limitado al uso de desarrollo/no comercial; para
+produccion comercial debe moverse al backend o al endpoint de cliente
+contratado, sin secretos en el APK.
 
 Los listados envian `lat`, `lng`, `radius_km`, `q`, `limit` y `offset`, paginan
 hasta 500 elementos y conservan filtrado local para compatibilidad. El backend
@@ -255,6 +277,8 @@ Unitarias:
 
 Instrumentadas:
 
+- navegación inferior de cinco destinos, label solo activo y nombres accesibles;
+- distancia/ETA directa y bottom sheet de Junta con acceso a `Cómo llegar`;
 - CTA publicos de crear/contactar en Marketplace y Juntas conectados a Cuenta;
 - actualizacion tardia de la fuente GeoJSON de juntas con estilo MapLibre
   offline y consulta de la capa renderizada;
@@ -270,21 +294,26 @@ Instrumentadas:
   de bicicletas;
 - placeholders base del proyecto.
 
-Última ejecución local (2026-08-11): 44 pruebas unitarias sin fallos, Lint sin
-incidencias y `:app:assembleDebug` correcto con el icono vectorial de APPbike.
-La verificación remota de GitHub Actions `31551839752` terminó correctamente
+Última ejecución local (2026-08-23): 59 pruebas unitarias sin fallos y 33
+pruebas instrumentadas sin fallos; 2 casos se omitieron por credenciales de Chat
+y permiso de notificaciones del AVD. `:app:assembleDebug`,
+`:app:assembleDebugAndroidTest` y `:app:lintDebug` terminaron correctamente.
+Lint conserva cuatro avisos informativos de versiones/ecosistema y forma del
+launcher, sin errores ni advertencias nuevas del rediseño.
+
+Como historial de integración continua, la verificación remota anterior de
+GitHub Actions `31551839752` terminó correctamente
 el 2026-08-12 UTC con JDK 17, SDK 37.0, las mismas pruebas unitarias, Lint y
 `assembleDebug` desde un runner limpio.
 La ejecucion `31552406399` repitio esa verificacion y publico el artefacto
 `appbike-debug-apk` (35,857,353 bytes, retencion de 14 dias) para instalar el
 mismo APK debug que fue comprobado.
-La última matriz instrumentada (2026-08-06) terminó con 24 pruebas sin fallos,
-con 2 omisiones esperadas por credenciales reales de Chat y
-condiciones de notificación del AVD. La migración coordinada a Gradle 9.6.1,
+La matriz instrumentada histórica del 2026-08-06 terminó con 24 pruebas sin
+fallos y 2 omisiones esperadas. La migración coordinada a Gradle 9.6.1,
 AGP 9.3.1, Kotlin integrado/Compose Compiler 2.4.10, API 37, Core 1.19,
 Lifecycle 2.11, Compose BOM 2026.06.01 y MapLibre 13.4.1 terminó correctamente.
-Lint informa `No issues found`. `:app:assembleDebug` y
-`:app:assembleRelease` terminaron correctamente. Se recorrieron Mapas,
+`:app:assembleDebug` y `:app:assembleRelease` terminaron correctamente en esa
+entrega. Se recorrieron Mapas,
 Bicicletas, Marketplace, Chat y Cuenta en `Small_Phone`, incluida la sección
 deportiva en pausa, en retrato, horizontal y 540 dp de ancho, sin
 `FATAL EXCEPTION` ni ANR. La matriz instrumentada completa se repitio ademas en

@@ -110,7 +110,8 @@ internal const val MARKETPLACE_DETAIL_HERO_TEST_TAG = "marketplace_detail_hero"
 fun MarketplaceScreen(
     account: AccountSession?,
     onOpenChat: (UserChat) -> Unit = {},
-    onOpenAccount: () -> Unit = {}
+    onOpenAccount: () -> Unit = {},
+    isActive: Boolean = true
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -135,6 +136,8 @@ fun MarketplaceScreen(
     var detailError by remember { mutableStateOf<String?>(null) }
     var detailRequestId by remember { mutableIntStateOf(0) }
     var locationChangeId by remember { mutableIntStateOf(0) }
+    var hasLoaded by remember { mutableStateOf(false) }
+    var selectedCategory by remember { mutableStateOf("") }
 
     fun refresh(fromPull: Boolean = false) {
         val center = location ?: run {
@@ -170,6 +173,7 @@ fun MarketplaceScreen(
             }.onFailure { error = RemoteConnections.userFriendlyError(it) }
             loading = false
             pullRefreshing = false
+            hasLoaded = true
         }
     }
 
@@ -267,11 +271,23 @@ fun MarketplaceScreen(
         }
     }
 
-    LaunchedEffect(location) {
-        if (location != null) refresh()
+    LaunchedEffect(location, isActive) {
+        if (isActive && location != null && !hasLoaded) refresh()
     }
 
     val currency = marketplaceCurrencyFor(location)
+    val categoryOptions = posts.mapNotNull { post ->
+        post.category.takeIf(String::isNotBlank)
+            ?: post.productType.takeIf(String::isNotBlank)
+    }.distinct().sorted()
+    val visiblePosts = if (selectedCategory.isBlank()) {
+        posts.toList()
+    } else {
+        posts.filter { post ->
+            post.category.equals(selectedCategory, ignoreCase = true) ||
+                post.productType.equals(selectedCategory, ignoreCase = true)
+        }
+    }
 
     PremiumScreenBackground(PremiumGlowStyle.Marketplace) {
         Box(Modifier.fillMaxSize()) {
@@ -343,6 +359,29 @@ fun MarketplaceScreen(
                 }
             }
 
+            if (categoryOptions.isNotEmpty()) {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(AppDimens.Space2)
+                ) {
+                    item {
+                        FilterChip(
+                            selected = selectedCategory.isBlank(),
+                            onClick = { selectedCategory = "" },
+                            label = { Text("Todo") }
+                        )
+                    }
+                    items(categoryOptions, key = { it.lowercase() }) { category ->
+                        FilterChip(
+                            selected = selectedCategory.equals(category, ignoreCase = true),
+                            onClick = { selectedCategory = category },
+                            label = {
+                                Text(category.replaceFirstChar(Char::uppercase), maxLines = 1)
+                            }
+                        )
+                    }
+                }
+            }
+
             error?.let { ErrorBanner(it) }
 
             PullToRefreshBox(
@@ -380,14 +419,26 @@ fun MarketplaceScreen(
                         )
                     }
 
-                    posts.isNotEmpty() -> LazyVerticalGrid(
+                    posts.isNotEmpty() && visiblePosts.isEmpty() -> Box(
+                        Modifier.fillMaxSize().padding(AppDimens.Space4),
+                        contentAlignment = Alignment.TopCenter
+                    ) {
+                        EmptyState(
+                            title = "Sin resultados en esta categoría",
+                            description = "Prueba otra categoría o vuelve a ver todo.",
+                            actionLabel = "Ver todo",
+                            onAction = { selectedCategory = "" }
+                        )
+                    }
+
+                    visiblePosts.isNotEmpty() -> LazyVerticalGrid(
                         columns = GridCells.Fixed(2),
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(bottom = AppDimens.Space8),
                         horizontalArrangement = Arrangement.spacedBy(AppDimens.Space3),
                         verticalArrangement = Arrangement.spacedBy(AppDimens.Space3)
                     ) {
-                        items(posts, key = { it.id }) { post ->
+                        items(visiblePosts, key = { it.id }) { post ->
                             MarketplaceCard(post) { openDetail(post.id) }
                         }
                     }
@@ -451,6 +502,8 @@ fun MarketplaceScreen(
                     val changeId = locationChangeId + 1
                     locationChangeId = changeId
                     location = point
+                    hasLoaded = false
+                    selectedCategory = ""
                     LocalDataStore.saveMarketplaceLocation(context, point)
                     showLocationPicker = false
                     error = null
@@ -461,6 +514,7 @@ fun MarketplaceScreen(
                         if (changeId != locationChangeId) return@launch
                         if (resolved != point) {
                             location = resolved
+                            hasLoaded = false
                             LocalDataStore.saveMarketplaceLocation(context, resolved)
                         }
                     }
@@ -632,6 +686,28 @@ private fun MarketplaceCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                post.location.substringAfter('|', post.location)
+                    .takeIf(String::isNotBlank)
+                    ?.let { locationLabel ->
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(AppDimens.Space1),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Outlined.LocationOn,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = AppTextSecondary
+                            )
+                            Text(
+                                locationLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AppTextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
                 if (post.productStatus.isNotBlank()) {
                     Text(
                         post.productStatus.replaceFirstChar(Char::uppercase),

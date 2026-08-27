@@ -22,22 +22,17 @@ class AppNavigationTest {
     }
 
     @Test
-    fun horizontalSwipeMovesInRequestedMainOrder() {
-        assertEquals(
-            AppScreen.MARKETPLACE,
-            mainDestinationAfterSwipe(AppScreen.BIKES, horizontalDrag = -120f, threshold = 72f)
-        )
-        assertEquals(
-            AppScreen.BIKES,
-            mainDestinationAfterSwipe(AppScreen.MARKETPLACE, horizontalDrag = 120f, threshold = 72f)
-        )
-        assertEquals(
-            AppScreen.CHAT,
-            mainDestinationAfterSwipe(AppScreen.CHAT, horizontalDrag = -120f, threshold = 72f)
-        )
-        assertEquals(
-            AppScreen.BIKES,
-            mainDestinationAfterSwipe(AppScreen.BIKES, horizontalDrag = 40f, threshold = 72f)
-        )
+    fun horizontalPagerKeepsRequestedMainOrderAndBounds() {
+        assertEquals(0, mainDestinationIndex(AppScreen.HOME))
+        assertEquals(1, mainDestinationIndex(AppScreen.MARKETPLACE))
+        assertEquals(2, mainDestinationIndex(AppScreen.ROUTES))
+        assertEquals(3, mainDestinationIndex(AppScreen.CHAT))
+        assertEquals(4, mainDestinationIndex(AppScreen.ACCOUNT))
+        assertEquals(4, mainDestinationIndex(AppScreen.BIKES))
+        assertEquals(4, mainDestinationIndex(AppScreen.SYNC))
+        assertEquals(1, mainDestinationIndex(AppScreen.CREATE_PUBLICATION))
+        assertEquals(AppScreen.HOME, mainDestinationAt(-1))
+        assertEquals(AppScreen.ROUTES, mainDestinationAt(2))
+        assertEquals(AppScreen.ACCOUNT, mainDestinationAt(99))
     }
 }

@@ -12,6 +12,9 @@ object LocalDataStore {
     private const val MARKETPLACE_LOCATION = "marketplace_location"
     private const val LOCATION_HISTORY = "location_history"
     private const val LOCATION_HISTORY_LIMIT = 8
+    private const val PROFILE_BIO = "profile_bio"
+    private const val PROFILE_PHOTO = "profile_photo"
+    private const val SOCIAL_POSTS = "social_posts"
     private const val CHATS = "chats"
     private const val MESSAGES = "messages"
     private const val SYNC = "chat_sync"
@@ -32,6 +35,58 @@ object LocalDataStore {
         val previousLocations = loadLocationHistory(context)
         saveGeoPoint(context, MARKETPLACE_LOCATION, point)
         rememberLocation(context, point, previousLocations)
+    }
+
+    fun rememberRecentLocation(context: Context, point: GeoPoint) {
+        rememberLocation(context, point, loadLocationHistory(context))
+    }
+
+    fun loadProfileBio(context: Context, userId: String): String =
+        prefs(context).getString("$PROFILE_BIO:$userId", "").orEmpty()
+
+    fun saveProfileBio(context: Context, userId: String, bio: String) {
+        prefs(context).edit { putString("$PROFILE_BIO:$userId", bio.trim()) }
+    }
+
+    fun loadProfilePhotoUri(context: Context, userId: String): String =
+        prefs(context).getString("$PROFILE_PHOTO:$userId", "").orEmpty()
+
+    fun saveProfilePhotoUri(context: Context, userId: String, uri: String) {
+        prefs(context).edit { putString("$PROFILE_PHOTO:$userId", uri) }
+    }
+
+    fun loadSocialPosts(context: Context, userId: String): List<SocialPost> =
+        readArray(context, "$SOCIAL_POSTS:$userId")
+            .mapNotNull { item ->
+                runCatching {
+                    SocialPost(
+                        id = item.getString("id"),
+                        userId = item.getString("userId"),
+                        username = item.optString("username"),
+                        caption = item.optString("caption"),
+                        mediaUri = item.getString("mediaUri"),
+                        mediaType = item.optString("mediaType", "photo"),
+                        createdAt = item.optLong("createdAt")
+                    )
+                }.getOrNull()
+            }
+            .filter { it.id.isNotBlank() && it.userId == userId && it.mediaUri.isNotBlank() }
+            .sortedByDescending(SocialPost::createdAt)
+
+    fun saveSocialPost(context: Context, post: SocialPost) {
+        val updated = (loadSocialPosts(context, post.userId) + post)
+            .distinctBy(SocialPost::id)
+            .sortedByDescending(SocialPost::createdAt)
+        writeArray(context, "$SOCIAL_POSTS:${post.userId}", updated.map { item ->
+            JSONObject()
+                .put("id", item.id)
+                .put("userId", item.userId)
+                .put("username", item.username)
+                .put("caption", item.caption)
+                .put("mediaUri", item.mediaUri)
+                .put("mediaType", item.mediaType)
+                .put("createdAt", item.createdAt)
+        })
     }
 
     fun loadLocationHistory(context: Context): List<GeoPoint> {

@@ -36,7 +36,12 @@ class ChatNotificationsInstrumentedTest {
 
         ChatNotificationCenter.showSystemNotification(context, event)
 
-        val posted = manager.activeNotifications.firstOrNull()
+        var posted = manager.activeNotifications.firstOrNull()
+        repeat(20) {
+            if (posted != null) return@repeat
+            Thread.sleep(50L)
+            posted = manager.activeNotifications.firstOrNull()
+        }
         assertNotNull(posted)
         assertEquals(
             "ciclista.prueba",

@@ -2,13 +2,18 @@
 
 ## Archivos
 
-- `AppModels.kt`: `GeoPoint`, `MeetupEvent`, `UserChat`, `StoredMessage`,
+- `AppModels.kt`: `GeoPoint`, `CyclingRoutePreview`, `MeetupEvent`, `UserChat`, `StoredMessage`,
   `ChatMessagePage`, `ChatSyncMetadata` y campos remotos de
   `ProductPublication`.
 - `LocalDataStore.kt`: ubicación, chats, mensajes y metadata por usuario.
 - `RemoteConnections.kt`: contratos HTTP y parsers.
-- `MapScreen.kt`: mapa, búsqueda, selección y creación de juntas.
-- `HomeScreen.kt`: historias y feed de Novedades con juntas y Marketplace activos.
+- `MapScreen.kt`: mapa, búsqueda, selector de destino, trayectos independientes,
+  bottom sheet y creación de juntas.
+- `CyclingNavigation.kt`: distancia geodesica y respaldo directo desacoplado de
+  las Juntas.
+- `HomeScreen.kt`: hero de aventura con cuatro imágenes locales en rotación,
+  historias y feed social/comunitario de juntas y publicaciones personales;
+  Marketplace permanece fuera de Inicio.
 - `MarketplaceScreen.kt`: búsqueda, grid, fotos y creación.
 - `ChatScreen.kt`: tabs, listado, conversación y sincronización.
 - `ChatNotifications.kt`: detección global, aviso dentro de la app, canal Android
@@ -22,11 +27,10 @@ La navegación raíz compone cabecera, contenido y barra inferior como hermanos
 directos. El contenido central se recorta para contener MapLibre y los fondos
 decorativos, mientras las barras persistentes conservan prioridad visual. En
 horizontal, la cabecera se compacta en una línea y la navegación usa 56 dp con
-iconos sin etiqueta visual, pero mantiene la semántica completa de los cuatro
-destinos. Esos destinos son Inicio, Bicicletas, Marketplace y Chat. Inicio carga
-Novedades reales, presenta historias y publicaciones en feed y abre Mapas como
-flujo secundario. Un gesto horizontal de 72 dp recorre los cuatro destinos; se
-desactiva en Mapas para conservar el desplazamiento propio de MapLibre.
+  iconos compactos y mantiene la semántica completa de los cinco destinos:
+  Inicio, Marketplace, Mapa, Chat y Perfil. Un `HorizontalPager` mantiene las
+  cinco paginas montadas para conservar estado; cada una difiere su primera
+  carga hasta activarse. Bicicletas queda como `Mi garaje` secundario desde Perfil.
 
 ## Mapa y juntas regionales
 
@@ -36,7 +40,9 @@ despues de que el mapa queda listo y consulta la capa renderizada; esto protege
 la actualizacion tardia de la fuente GeoJSON. En la validacion real del
 2026-08-06, Osorno mostro el marcador azul, el detalle remoto y su foto Base64.
 
-La pantalla mantiene MapLibre Native OpenGL 13.4.1. Un boton circular con el
+La pantalla mantiene MapLibre Native OpenGL 13.4.1. Dentro del pager crea el
+`MapView` en modo TextureView solo al primer ingreso y baja su FPS fuera de
+pantalla. Un boton circular con el
 icono universal de capas abre el menu `Mapa`/`Satélite`; la interfaz inicial deja
 solo ese control y una lupa bajo la cabecera. `Mapa` usa Liberty de OpenFreeMap y
 `Satélite` World Imagery de Esri con una capa de etiquetas de referencia. Cambiar de modo reutiliza el
@@ -52,6 +58,27 @@ marcador verde representa la ubicación local guardada y no se
 mueve al desplazar el mapa. Las juntas con coordenadas válidas usan marcador
 azul y abren su detalle al tocarlas.
 
+`Trayecto` y `Junta` aparecen como acciones distintas. `Trayecto` funciona sin
+sesion, reutiliza el buscador de lugares para elegir un destino independiente y
+solicita una geometria de bicicleta al demo FOSSGIS/OSRM de OpenStreetMap. La
+`LineLayer` sigue el camino devuelto por calles, el marcador azul identifica el
+destino y la camara encuadra la geometria completa. Distancia y duración vienen
+del ruteador. La selección se añade al historial de lugares recientes.
+
+El detalle de Junta sigue siendo un `ModalBottomSheet`. `Cómo llegar` reutiliza
+el mismo planificador genérico sin convertir la Junta en un trayecto guardado ni
+mezclar ambos flujos. Si el servicio de ruteo no responde, Android muestra una
+línea directa rotulada como respaldo y conserva `Abrir navegación ciclista` con
+la URL oficial de Google Maps y `travelmode=bicycling`. Cada solicitud puede
+cancelarse y respuestas anteriores se descartan. La interfaz no inventa
+participantes, dificultad, desnivel, superficie ni tipo de ciclismo ausentes del
+backend.
+
+El ruteador público se reserva para desarrollo y pruebas de bajo volumen: no
+recibe el Bearer de APPbike y no ofrece SLA. Antes de publicar comercialmente se
+debe usar un proxy del backend o una instancia propia de OSRM y conservar la
+atribucion `© OpenStreetMap contributors`.
+
 Las fuentes raster satelitales anuncian zoom 19, pero en sectores de Puerto
 Varas World Imagery devuelve en ese nivel una tesela gris `Map data not yet
 available`; una tesela puntual conserva imagen en 18, pero el zoom anclado puede
@@ -59,10 +86,9 @@ alcanzar sectores vecinos sin cobertura en ese mismo nivel. Por eso la camara de
 MapLibre se detiene en 17 y no permite sobrezoom hacia niveles problematicos.
 
 Para conservar acceso por teclado alrededor del `AndroidView`, la lupa, capas y
-la acción Crear junta se componen antes del mapa y se dibujan por encima con
-`zIndex(1f)`. Al tocar la lupa aparecen el buscador y la fila de ubicacion sobre
-superficies semitransparentes. El recorrido mantiene Cuenta, lupa, capas,
-buscador expandido, ubicación actual, Crear junta, mapa y destinos disponibles.
+las acciones `Trayecto`/`Junta` se componen antes del mapa y se dibujan por encima
+con `zIndex(1f)`. Al tocar la lupa aparecen el buscador y la fila de ubicacion
+sobre superficies semitransparentes.
 
 El onboarding y la corrección de ubicación no cambian: permisos Android en el
 primer ingreso, confirmación antes de persistir y sugerencias en vivo. La capa
@@ -161,18 +187,19 @@ En el detalle, ese estado sin portada ocupa 180 dp en lugar del hero de 340 dp;
 cuando existe una fotografia se conserva la altura protagonista completa.
 
 Marketplace público solicita exclusivamente `publication_status=activa`,
-mantiene búsqueda local sobre la respuesta y filtra a 40 km cuando el registro
+mantiene búsqueda y filtros locales por categoria sobre la respuesta y filtra a
+40 km cuando el registro
 contiene coordenadas codificadas. Los filtros `activa`, `pausada`, `vendida` y
 `en_revision` se retiran de esta vista, pero sus acciones remotas se conservan
 para la futura administración de publicaciones propias desde el perfil.
-La cabecera raíz de marca/perfil conserva prioridad de dibujo sobre el fondo de
+La cabecera raíz de marca/clima conserva prioridad de dibujo sobre el fondo de
 Marketplace y permanece visible durante carga, listado y estado vacío.
 El fondo decorativo se recorta a los límites del contenido. Con fuente Android
 al 200 %, búsqueda, ubicación, moneda y navegación conservan jerarquía; los
 nombres largos se eliden sin reducir el tamaño de texto configurado.
-La misma prioridad se verificó navegando Inicio → Bicicletas → Marketplace →
-Chat en horizontal; el cambio de destino no debe ocultar ni retrasar el repintado
-de la marca o del acceso a Cuenta.
+La misma prioridad se conserva navegando Inicio → Marketplace → Mapa → Chat →
+Perfil en horizontal; el cambio de destino no debe ocultar ni retrasar el repintado
+de la marca o del clima.
 
 Al entrar a la pantalla o ejecutar una búsqueda se muestra un indicador circular
 superpuesto durante un mínimo de 450 ms. Cada recarga tiene un identificador;
@@ -287,6 +314,11 @@ Tabs:
 - `SOCIAL`: juntas, amigos y grupos.
 - `MARKETPLACE`: conversaciones asociadas a publicaciones.
 
+Las filas distinguen visualmente `JUNTA` y `COMPRA`. Si un chat social incluye
+`relatedEntityId`, la conversación ofrece `Ver en mapa`; la raiz cambia a Mapa y
+`RoutesScreen` carga el detalle remoto de esa Junta sin depender del listado
+regional ya visible.
+
 Flujo:
 
 1. Sin sesión no se consulta ni muestra información.
@@ -297,8 +329,8 @@ Flujo:
 6. Inmediatamente se pide la primera página completa, sin
    `after_message_id`, para reparar huecos históricos. El cursor no se envía con
    cadena vacía porque el backend responde `after_message_id no es valido`.
-7. Con la conversación abierta se consulta cada 3 segundos usando el último ID;
-   los mensajes nuevos del otro usuario aparecen sin cerrar ni reabrir.
+7. Con la conversación abierta y Chat visible se consulta cada 3 segundos usando
+   el último ID; al cambiar de pestaña el efecto se cancela y al volver se reanuda.
 8. Las páginas se combinan sin duplicados y se guardan mensajes, cantidad,
    versión y último ID después de descargar o enviar.
 9. IDs vacíos o mensajes de otra conversación se rechazan antes de Compose y de

@@ -17,9 +17,14 @@ internal object RemoteImageLoader {
     private val byteCache = object : LruCache<String, ByteArray>(16 * 1024 * 1024) {
         override fun sizeOf(key: String, value: ByteArray): Int = value.size
     }
+    private val bitmapCache = object : LruCache<String, Bitmap>(24 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
+    }
 
     fun loadBitmap(source: String, maxDimension: Int = 1280): Bitmap? {
         if (source.isBlank()) return null
+        val bitmapKey = "$source#$maxDimension"
+        bitmapCache.get(bitmapKey)?.let { return it }
         val bytes = byteCache.get(source) ?: loadBytes(source)?.also {
             byteCache.put(source, it)
         } ?: return null
@@ -36,7 +41,7 @@ internal object RemoteImageLoader {
             0,
             bytes.size,
             BitmapFactory.Options().apply { inSampleSize = sample.coerceAtLeast(1) }
-        )
+        )?.also { bitmapCache.put(bitmapKey, it) }
     }
 
     fun loadLocalBitmap(context: Context, uri: Uri, maxDimension: Int = 1600): Bitmap? {

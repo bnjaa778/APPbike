@@ -1,5 +1,10 @@
 package com.example.appbike
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -45,6 +50,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.VisualTransformation
@@ -53,8 +59,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.appbike.ui.theme.AppBackground
 import com.example.appbike.ui.theme.AppBackgroundElevated
-import com.example.appbike.ui.theme.AppAccentAmber
 import com.example.appbike.ui.theme.AppAccentBlue
+import com.example.appbike.ui.theme.AppAccentOrange
 import com.example.appbike.ui.theme.AppBorderActive
 import com.example.appbike.ui.theme.AppBorderSubtle
 import com.example.appbike.ui.theme.AppError
@@ -70,6 +76,7 @@ import com.example.appbike.ui.theme.AppTextPrimary
 import com.example.appbike.ui.theme.AppTextSecondary
 
 enum class PremiumGlowStyle {
+    Home,
     Account,
     Bikes,
     Marketplace,
@@ -85,9 +92,10 @@ fun PremiumScreenBackground(
 ) {
     val base = AppBackground
     val secondaryGlow = when (style) {
+        PremiumGlowStyle.Home -> AppAccentOrange
         PremiumGlowStyle.Account -> AppAccentBlue
         PremiumGlowStyle.Bikes -> AppAccentBlue
-        PremiumGlowStyle.Marketplace -> AppAccentAmber
+        PremiumGlowStyle.Marketplace -> AppAccentOrange
         PremiumGlowStyle.Chat -> AppPrimaryBright
         PremiumGlowStyle.Map -> AppAccentBlue
     }
@@ -98,6 +106,7 @@ fun PremiumScreenBackground(
             .drawBehind {
                 val max = size.maxDimension
                 val centerY = when (style) {
+                    PremiumGlowStyle.Home -> 0.12f
                     PremiumGlowStyle.Account -> 0.18f
                     PremiumGlowStyle.Bikes -> 0.26f
                     PremiumGlowStyle.Marketplace -> 0.16f
@@ -146,6 +155,28 @@ object AppDimens {
     val Space10 = 40.dp
 }
 
+object AppMotion {
+    const val Fast = 150
+    const val Standard = 220
+    const val Emphasis = 300
+    const val SkeletonPulse = 760
+}
+
+object AppSizes {
+    val TouchTarget = 48.dp
+    val NavigationBarPortrait = 76.dp
+    val NavigationBarLandscape = 58.dp
+    val NavigationIcon = 24.dp
+    val NavigationIconEmphasized = 28.dp
+    val HeaderLogo = 34.dp
+}
+
+object AppElevation {
+    val Flat = 0.dp
+    val Raised = 6.dp
+    val Floating = 12.dp
+}
+
 fun Modifier.appSubtleGlow(enabled: Boolean = true): Modifier = drawBehind {
     if (!enabled) return@drawBehind
     drawCircle(
@@ -175,13 +206,88 @@ fun AppCard(
             1.dp,
             if (highlighted) AppBorderActive.copy(alpha = 0.58f) else AppBorderSubtle
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (highlighted) 6.dp else 0.dp)
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = if (highlighted) AppElevation.Raised else AppElevation.Flat
+        )
     ) {
         Column(
             modifier = Modifier.padding(AppDimens.Space5),
             content = content
         )
     }
+}
+
+@Composable
+fun SportMetricCard(
+    value: String,
+    label: String,
+    modifier: Modifier = Modifier,
+    accent: Color = AppPrimaryBright,
+    supporting: String? = null
+) {
+    Surface(
+        modifier = modifier.defaultMinSize(minHeight = 88.dp),
+        shape = RoundedCornerShape(AppDimens.RadiusLarge),
+        color = AppSurfaceElevated,
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.30f)),
+        tonalElevation = AppElevation.Flat,
+        shadowElevation = AppElevation.Flat
+    ) {
+        Column(
+            modifier = Modifier.padding(AppDimens.Space4),
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(
+                AppDimens.Space1
+            )
+        ) {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Black,
+                color = accent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = AppTextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            supporting?.takeIf(String::isNotBlank)?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppTextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun AppSkeleton(
+    modifier: Modifier = Modifier,
+    shape: RoundedCornerShape = RoundedCornerShape(AppDimens.RadiusMedium)
+) {
+    val transition = rememberInfiniteTransition(label = "APPbike skeleton")
+    val pulse by transition.animateFloat(
+        initialValue = 0.32f,
+        targetValue = 0.72f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = AppMotion.SkeletonPulse),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "APPbike skeleton pulse"
+    )
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(AppSurfaceElevated.copy(alpha = pulse))
+    )
 }
 
 @Composable

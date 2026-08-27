@@ -1,19 +1,20 @@
 # Estado actual de APPbike
 
-Actualizado: 2026-08-16.
+Actualizado: 2026-08-23.
 
 ## Aplicación
 
 - Android nativo con Jetpack Compose, paquete `com.example.appbike`.
 - Entrada: `MainActivity.kt`.
-- Destinos principales: Inicio, Bicicletas, Marketplace y Chat.
+- Destinos principales: Inicio, Marketplace, Mapa, Chat y Perfil. Bicicletas se
+  abre como `Mi garaje` secundario desde Perfil.
 - Después del logo, una sesion completa se verifica con `user.get`: si backend
   la acepta abre Inicio; sin sesion o con token rechazado se limpia la identidad
   y aparece un acceso MTB a pantalla completa, sin Perfil, cabecera ni barra
   inferior. Una cuenta válida sin nombre abre Cuenta para completar identidad.
   Timeouts/5xx no expulsan.
-- Inicio presenta historias y un feed de Novedades con juntas y publicaciones
-  activas; el mapa se abre desde su acceso dedicado.
+- Inicio presenta un carrusel de descubrimiento y feed de cards diferenciadas
+  para juntas y publicaciones activas.
 - API pública: `https://api.zizzio.cl/APIS/AppBikeExternal.php`.
 - La sesión usa UUID como identidad interna y Bearer token cifrado con Android
   Keystore. `nombre_de_usuario` es únicamente la identidad visible.
@@ -32,8 +33,8 @@ Actualizado: 2026-08-16.
 - La sincronización deportiva está pausada por decisión de producto. Strava,
   Garmin y Wahoo se muestran como tarjetas no interactivas con cinta diagonal
   `PRÓXIMAMENTE`; Android no ejecuta acciones OAuth mientras siga detenida.
-- El bloque deportivo aparece antes de `Tu actividad`, de modo que las tres
-  plataformas se descubren juntas antes de los listados propios extensos.
+- Perfil prioriza `Mi garaje`, rendimiento disponible y `Tu actividad`; el
+  bloque deportivo pausado aparece despues y mantiene juntas las tres plataformas.
 - Al autenticar correctamente se borran de inmediato el usuario y la contraseña
   escritos. El contenido de perfil se reinicia por `userId`, por lo que una
   respuesta tardía de otra cuenta no puede conservarse en pantalla.
@@ -54,10 +55,9 @@ Actualizado: 2026-08-16.
 - Identidad oscura grafito/verde eléctrico con superficies de alto contraste.
 - Campos de texto y búsqueda usan contorno LED verde-azul, con mayor intensidad
   al recibir foco.
-- La barra inferior usa cuatro vectores propios de trazo redondeado: hogar para
-  Inicio, eslabón para Bicicletas, prisma de intercambio para
-  Marketplace y órbita social para Chat. Son tintables y conservan etiquetas
-  semánticas completas.
+- La barra inferior usa cinco iconos Material Outlined coherentes. Mapa tiene
+  mayor peso visual, solo el destino activo muestra texto y los cinco conservan
+  nombres semánticos completos.
 - Launcher, variante redonda y cabecera usan la copia exacta del símbolo blanco
   sobre negro entregado por el usuario en `appbike_brand_icon.png`.
 - El acceso sin sesion usa `auth_mtb_background.png`, una fotografía vertical
@@ -67,14 +67,14 @@ Actualizado: 2026-08-16.
 - Entre la marca y Cuenta, la cabecera muestra el clima de la posicion GPS con
   temperatura, estado e iconos propios para sol/noche, nubes, niebla, lluvia,
   nieve, tormenta y granizo. Actualiza cada 15 minutos y acredita de forma
-  visible a Open-Meteo. Es solo informativo: tocarlo no ejecuta acciones ni abre
-  paginas externas.
+  visible a Open-Meteo. Al tocarlo abre dentro de la cabecera un panel
+  desplegable animado con el pronostico de seis dias; no abre paginas externas.
 - Cuenta conserva el icono anterior `PersonOutline`, su indicador verde de
   sesion, un objetivo tactil de 48 dp y descripcion accesible. El clima mantiene
   intacto su espacio contiguo.
 - El splash de plataforma queda negro; después `LaunchBrandScreen` anima 40 LED
   blancos que convergen desde las cuatro esquinas, revela el mismo logo y entra
-  a la interfaz a los 2.550 ms. El logo completo no se adelanta a la animación.
+  a la interfaz a los 5.000 ms. El logo completo no se adelanta a la animación.
 - Tipografía, radios, espaciado, tarjetas y estados comparten tokens centrales
   en `ui/theme/` y `CommonComponents.kt`.
 - `ui/theme/Color.kt` es la fuente única de color; los recursos morado/teal de
@@ -83,18 +83,18 @@ Actualizado: 2026-08-16.
 - La cabecera raíz tiene prioridad de dibujo sobre los fondos decorativos y se
   mantiene visible también en Marketplace. Los placeholders de búsqueda usan
   un contraste de 9,16:1 sobre la superficie elevada.
-- Con fuente Android de 160 % o más, la cabecera usa una firma compacta, la
-  barra inferior muestra `Bicis`/`Tienda` sin perder sus nombres semánticos.
+- Con fuente Android de 160 % o más, la cabecera usa una firma compacta y la
+  barra inferior conserva nombres semánticos sin rotular destinos inactivos.
 - Las tarjetas deportivas cambian a reflow vertical a escala grande; las cintas
   `PRÓXIMAMENTE` conservan tamaño visual y no invaden el texto. Los estados
   vacíos priorizan su CTA y Chat permite desplazamiento a 200 %.
 - Cada fondo decorativo se recorta a los límites de su pantalla para no pintar
   sobre cabecera o navegación raíz.
 - En horizontal, la cabecera usa una firma de marca en una línea y la barra
-  inferior mide 56 dp con iconos sin etiqueta visual; las descripciones
-  semánticas siguen anunciando Inicio, Bicicletas, Marketplace y Chat.
-- Un gesto horizontal de 72 dp cambia Inicio/Bicicletas/Marketplace/Chat en
-  ambos sentidos; el mapa secundario queda fuera del detector para poder moverse.
+  inferior compacta conserva descripciones completas para los cinco destinos.
+- Un `HorizontalPager` sincronizado con la barra cambia Inicio/Marketplace/Mapa/
+  Chat/Perfil. Las cinco paginas quedan montadas, sus estados se conservan y las
+  cargas de red se difieren hasta la primera activacion.
 - Cabecera, contenido y navegación son hermanos directos en la raíz. Solo el
   contenido central usa recorte, evitando que MapLibre o los fondos Compose
   oculten barras persistentes durante la navegación horizontal.
@@ -123,6 +123,15 @@ Actualizado: 2026-08-16.
   oculto y atribucion informativa conservada. La lupa despliega buscador y
   ubicacion semitransparentes; la camara satelital se detiene en zoom 17 para no
   entrar a teselas grises que Esri devuelve localmente en zoom 18/19.
+- Mapa es el destino central. Usa TextureView dentro del pager, se inicializa al
+  primer ingreso y baja a 4 FPS al quedar inactivo.
+- Tocar una Junta abre un bottom sheet. Con ubicacion confirmada muestra distancia
+  y ETA; `Cómo llegar` calcula y dibuja un camino ciclista por calles. El mismo
+  mapa ofrece `Trayecto` como función separada de `Junta`, sin exigir cuenta, con
+  selector de destino, marcador, encuadre completo y cancelación. Si el demo de
+  ruteo falla usa una línea directa explícitamente rotulada como respaldo. No
+  inventa participantes, dificultad, desnivel ni tipo de ciclismo ausentes del
+  backend.
 - Solicitud inicial de ubicación, confirmación, corrección manual y sugerencias
   en vivo con Unicode.
 - El primer foco del selector limpia la etiqueta previa; la nueva búsqueda no se
@@ -144,7 +153,8 @@ Actualizado: 2026-08-16.
 - Crear una publicacion o contactar al vendedor sin sesion abre Cuenta.
 
 - Ubicación independiente y persistente.
-- Búsqueda, recarga al arrastrar, indicador de carga y detalle a pantalla completa.
+- Búsqueda, filtros locales por categoria, recarga al arrastrar, indicador de
+  carga y detalle a pantalla completa; estado y posicion se conservan entre tabs.
 - La cabecera de marca/perfil permanece visible durante la carga y el estado
   vacío de Marketplace.
 - Precio entero con símbolo no editable, agrupación de miles y moneda por país.
@@ -157,6 +167,8 @@ Actualizado: 2026-08-16.
 ### Chat
 
 - Tabs social y Marketplace.
+- Las filas distinguen visualmente Junta/Compra. Un chat social con entidad
+  relacionada ofrece `Ver en mapa` y abre el detalle de esa Junta.
 - Caché separada por usuario/chat.
 - Reparación completa al abrir y sincronización incremental cada tres segundos
   dentro de una conversación.
@@ -170,6 +182,7 @@ Actualizado: 2026-08-16.
   misma fecha conservan orden numérico.
 - Cada conversación tiene su propia exclusión mutua: sincronización, polling y
   envío no pueden sobrescribirse, mientras otra conversación puede continuar.
+- El polling se cancela cuando Chat no es la pestaña activa y se reanuda al volver.
 - El backend puede omitir `chatId` en un mensaje antiguo y Android lo completa;
   si declara otro chat, se rechaza antes de Compose y de la caché. La persistencia
   de historiales se ejecuta en `Dispatchers.IO`.
@@ -230,14 +243,15 @@ Actualizado: 2026-08-16.
   de Zizzio; una fuente rechazada muestra placeholder.
 - Backup de nube y transferencia excluyen identidad, token cifrado, ubicaciones
   y cachés de Chat.
-- La UI pública se recorrió en el AVD `Small_Phone` el 2026-08-06 sin excepción
-  fatal ni ANR; compilaciones debug/release, 44 pruebas unitarias y 24 pruebas
-  instrumentadas terminaron sin fallos. Dos casos se omitieron por las
-  condiciones externas esperadas de Chat y notificaciones. El proyecto usa
+- La verificación local del 2026-08-23 terminó con 59 pruebas unitarias y 33
+  pruebas instrumentadas sin fallos. Dos casos instrumentados se omitieron por
+  las condiciones externas esperadas de Chat y notificaciones. `assembleDebug`,
+  `assembleDebugAndroidTest` y Lint terminaron correctamente. El proyecto usa
   Gradle 9.6.1, AGP 9.3.1, Kotlin integrado/Compose Compiler 2.4.10,
-  compile/target 37, Compose BOM 2026.06.01 y MapLibre 13.4.1. Lint informa
-  `No issues found`. Un acceso de
-  notificación para otro usuario fue descartado en runtime.
+  compile/target 37, Compose BOM 2026.06.01 y MapLibre 13.4.1. Lint no informa
+  errores; conserva cuatro avisos informativos de versiones/ecosistema y forma
+  del launcher. Un acceso de notificación para otro usuario fue descartado en
+  runtime.
 
 ## Rutas importantes
 
@@ -255,10 +269,9 @@ Actualizado: 2026-08-16.
   servicio persistente.
 - El AVD actual está limpio y sin cuenta; para pruebas autenticadas se debe
   iniciar sesión con credenciales de prueba.
-- El APK y la matriz instrumentada ya se validaron en el AVD independiente
-  `APPbike_API_37` con Android 17/API 37: 24 casos, 0 fallos y 2 omisiones
-  externas esperadas. La app queda abierta en ese AVD sobre las cintas
-  deportivas.
+- El APK y la matriz actual se validaron en `APPbike_API_35`: 33 casos, 0
+  fallos y 2 omisiones externas esperadas. La cobertura incluye navegación de
+  cinco destinos, semántica, sheet de Junta, mapa offline y CTA protegidos.
 - `RemoteConnections` ya evita adjuntar un Bearer a acciones públicas. Mantener
   esa separación al agregar acciones nuevas para que un token vencido no rompa
   Mapas, Marketplace ni login.
@@ -277,3 +290,20 @@ Actualizado: 2026-08-16.
   runner limpio JDK 17, SDK 37.0, pruebas unitarias, Lint y `assembleDebug`.
 - Cada ejecucion correcta conserva durante 14 dias el artefacto descargable
   `appbike-debug-apk`; es apto para pruebas, no para distribucion firmada.
+
+## Rediseño UX/UI 2026-08-26
+
+- Inicio separa Marketplace y usa un hero local de cuatro fotografías con
+  rotación de 4 segundos; el feed mezcla solo Juntas activas y publicaciones
+  personales locales del usuario activo.
+- El acceso superior a Perfil fue eliminado. Perfil ahora ofrece avatar, bio,
+  estadísticas honestas y un compositor local de foto/video aislado por UUID.
+- Mapa mantiene sus contratos y ruteo interno; `Trayecto` y `Junta` usan
+  controles flotantes compactos. Splash usa logo centrado de tamaño constante.
+- Build verificada: 59 unitarias y 38 instrumentadas, 0 fallos; 2 omisiones
+  externas esperadas en Chat/notificaciones. `assembleDebug`,
+  `assembleDebugAndroidTest`, `lintDebug` y `git diff --check` correctos.
+- Evidencia visual del AVD: `CodexChats/audits/2026-08-26-redesign-after-launch.png`
+  y `CodexChats/audits/2026-08-26-redesign-account.png`.
+- Pendiente: backend social remoto y recorrido autenticado en teléfono físico
+  desbloqueado.

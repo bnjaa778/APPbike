@@ -98,7 +98,7 @@ class PublicLoginCtaInstrumentedTest {
             }
         }
 
-        compose.onNodeWithText("Inicia sesión para contactar")
+        compose.onNodeWithText("Inicia sesión para participar")
             .performScrollTo()
             .assertIsDisplayed()
             .assertIsEnabled()
@@ -107,6 +107,47 @@ class PublicLoginCtaInstrumentedTest {
         compose.runOnIdle {
             assertTrue("El CTA de Juntas debe abrir Cuenta.", accountRequested)
         }
+    }
+
+    @Test
+    fun meetupSheetShowsHonestRouteEstimateAndStartsPreview() {
+        var previewRequested = false
+        val origin = GeoPoint(-33.4489, -70.6693, "Santiago")
+        val destination = GeoPoint(-33.4372, -70.6506, "Parque")
+        val preview = buildDirectCyclingRoutePreview(origin, destination)
+        compose.setContent {
+            APPbikeTheme(dynamicColor = false) {
+                MeetupDetailDialog(
+                    event = MeetupEvent(
+                        id = "meetup-route",
+                        title = "Pedaleo urbano",
+                        dateTime = "2026-08-23 09:00",
+                        description = "Salida de prueba",
+                        latitude = destination.latitude,
+                        longitude = destination.longitude,
+                        createdBy = "owner-1",
+                        location = "LAS:${destination.latitude},${destination.longitude}|Parque"
+                    ),
+                    account = null,
+                    loading = false,
+                    error = null,
+                    routePreview = preview,
+                    onDismiss = {},
+                    onComplete = {},
+                    onAddPhoto = {},
+                    onContact = {},
+                    onPreviewRoute = { previewRequested = true }
+                )
+            }
+        }
+
+        compose.onNodeWithText("Distancia directa").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Tiempo estimado").assertIsDisplayed()
+        compose.onNodeWithText("Cómo llegar")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+        compose.runOnIdle { assertTrue(previewRequested) }
     }
 
     @Test

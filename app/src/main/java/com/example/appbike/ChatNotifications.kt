@@ -111,10 +111,25 @@ object ChatNotificationCenter {
 
     fun startListener(context: Context) {
         createChannel(context)
-        ContextCompat.startForegroundService(
-            context.applicationContext,
-            Intent(context.applicationContext, ChatNotificationListenerService::class.java)
-        )
+        try {
+            ContextCompat.startForegroundService(
+                context.applicationContext,
+                Intent(context.applicationContext, ChatNotificationListenerService::class.java)
+            )
+        } catch (error: IllegalStateException) {
+            // Android can reject a foreground-service start after the activity
+            // loses its launch exemption. Notifications are supplementary and
+            // must never prevent APPbike from opening.
+            if (
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+                error::class.java.name !=
+                    "android.app.ForegroundServiceStartNotAllowedException"
+            ) {
+                throw error
+            }
+        } catch (_: SecurityException) {
+            // Missing/revoked foreground-service permission must not crash the app.
+        }
     }
 
     fun stopListener(context: Context) {

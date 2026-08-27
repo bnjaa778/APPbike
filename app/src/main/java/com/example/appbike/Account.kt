@@ -2,11 +2,16 @@ package com.example.appbike
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,7 +33,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.PedalBike
+import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Watch
@@ -54,10 +62,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
@@ -364,11 +375,15 @@ internal fun UnauthenticatedAccessScreen(
 fun AccountScreen(
     session: AccountSession?,
     platforms: MutableList<SyncPlatform>,
+    isActive: Boolean = true,
+    bikeCount: Int = 0,
+    onOpenBikes: () -> Unit = {},
     initialErrorMessage: String? = null,
     oauthCallback: SportsOAuthCallback? = null,
     onOauthCallbackConsumed: () -> Unit = {},
     onLogin: (AccountSession) -> Unit,
     onSessionUpdated: (AccountSession) -> Unit,
+    onProfilePhotoChanged: (String) -> Unit = {},
     onLogout: () -> Unit
 ) {
     var email by remember { mutableStateOf("") }
@@ -379,8 +394,28 @@ fun AccountScreen(
     var usernameCandidate by remember(session?.userId) { mutableStateOf("") }
     var usernameLoading by remember { mutableStateOf(false) }
     var usernameError by remember { mutableStateOf<String?>(null) }
+    var profileBio by remember(session?.userId) { mutableStateOf("") }
+    var profilePhotoUri by remember(session?.userId) { mutableStateOf("") }
+    var profileBioDraft by remember(session?.userId) { mutableStateOf("") }
+    var profileEditing by remember(session?.userId) { mutableStateOf(false) }
+    var socialPostCount by remember(session?.userId) { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
+    val profilePhotoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        val activeUserId = session?.userId ?: return@rememberLauncherForActivityResult
+        uri ?: return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+        profilePhotoUri = uri.toString()
+        LocalDataStore.saveProfilePhotoUri(context, activeUserId, profilePhotoUri)
+        onProfilePhotoChanged(profilePhotoUri)
+    }
 
     LaunchedEffect(initialErrorMessage, session?.userId) {
         if (session == null && !initialErrorMessage.isNullOrBlank()) {
@@ -388,7 +423,8 @@ fun AccountScreen(
         }
     }
 
-    LaunchedEffect(session?.userId) {
+    LaunchedEffect(session?.userId, isActive) {
+        if (!isActive) return@LaunchedEffect
         val activeSession = session ?: run {
             profileCheckedUserId = null
             return@LaunchedEffect
@@ -401,6 +437,20 @@ fun AccountScreen(
             }.onSuccess(onSessionUpdated)
         }
         profileCheckedUserId = activeSession.userId
+    }
+
+    LaunchedEffect(session?.userId) {
+        val activeUserId = session?.userId
+        if (activeUserId == null) {
+            profileBio = ""
+            profileBioDraft = ""
+            profilePhotoUri = ""
+        } else {
+            profileBio = LocalDataStore.loadProfileBio(context, activeUserId)
+            profileBioDraft = profileBio
+            profilePhotoUri = LocalDataStore.loadProfilePhotoUri(context, activeUserId)
+        }
+        profileEditing = false
     }
 
     LaunchedEffect(oauthCallback) {
@@ -417,7 +467,37 @@ fun AccountScreen(
                 .padding(top = 18.dp, bottom = 40.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            AccountReferenceHeader(session)
+            if (session == null) {
+                AccountReferenceHeader(session)
+            } else {
+                RiderProfileHeader(
+                    session = session,
+                    bio = profileBio,
+                    photoUri = profilePhotoUri,
+                    bikeCount = bikeCount,
+                    socialPostCount = socialPostCount,
+                    isEditing = profileEditing,
+                    bioDraft = profileBioDraft,
+                    onEditBio = {
+                        profileBioDraft = profileBio
+                        profileEditing = true
+                    },
+                    onBioDraftChange = { profileBioDraft = it.take(160) },
+                    onCancelBio = {
+                        profileBioDraft = profileBio
+                        profileEditing = false
+                    },
+                    onSaveBio = {
+                        LocalDataStore.saveProfileBio(context, session.userId, profileBioDraft)
+                        profileBio = profileBioDraft.trim()
+                        profileEditing = false
+                    },
+                    onPickPhoto = {
+                        profilePhotoPicker.launch(arrayOf("image/*"))
+                    },
+                    onOpenBikes = onOpenBikes
+                )
+            }
 
         if (session == null) {
             LoginCard(
@@ -448,7 +528,7 @@ fun AccountScreen(
                 }
             )
         } else {
-            ProfileCard(
+            ProfileActionsCard(
                 session = session,
                 notificationsEnabled = ChatNotificationCenter.canPostNotifications(context),
                 onOpenNotificationSettings = {
@@ -467,7 +547,46 @@ fun AccountScreen(
             )
         }
 
-        AccountHeroPanel()
+        if (session != null) {
+            SectionHeader(title = "Rendimiento")
+            Row(horizontalArrangement = Arrangement.spacedBy(AppDimens.Space3)) {
+                SportMetricCard(
+                    value = "—",
+                    label = "Kilómetros",
+                    supporting = "Sin actividad",
+                    modifier = Modifier.weight(1f)
+                )
+                SportMetricCard(
+                    value = "—",
+                    label = "Tiempo total",
+                    supporting = "Sin actividad",
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(AppDimens.Space3)) {
+                SportMetricCard(
+                    value = "—",
+                    label = "Desnivel",
+                    supporting = "Sin actividad",
+                    modifier = Modifier.weight(1f)
+                )
+                SportMetricCard(
+                    value = bikeCount.toString(),
+                    label = "Bicicletas",
+                    supporting = "En tu garaje",
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Text(
+                text = "Las métricas deportivas aparecerán aquí cuando la sincronización de actividades esté disponible.",
+                color = AppTextSecondary,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+
+        if (session == null) {
+            AccountHeroPanel()
+        }
 
         HorizontalDivider(color = AppBorderSubtle)
 
@@ -519,7 +638,12 @@ fun AccountScreen(
 
         if (session != null) {
             HorizontalDivider(color = AppBorderSubtle)
-            ProfileContentSection(session)
+            ProfileContentSection(
+                account = session,
+                isActive = isActive,
+                onSocialPostCountChanged = { socialPostCount = it }
+            )
+            HorizontalDivider(color = AppBorderSubtle)
         }
 
             Spacer(Modifier.height(12.dp))
@@ -609,6 +733,257 @@ fun AccountScreen(
 
 private fun isValidUsername(value: String): Boolean =
     Regex("^[A-Za-z0-9][A-Za-z0-9._-]{2,29}$").matches(value.trim())
+
+@Composable
+private fun RiderProfileHeader(
+    session: AccountSession,
+    bio: String,
+    photoUri: String,
+    bikeCount: Int,
+    socialPostCount: Int,
+    isEditing: Boolean,
+    bioDraft: String,
+    onEditBio: () -> Unit,
+    onBioDraftChange: (String) -> Unit,
+    onCancelBio: () -> Unit,
+    onSaveBio: () -> Unit,
+    onPickPhoto: () -> Unit,
+    onOpenBikes: () -> Unit
+) {
+    AppCard(
+        modifier = Modifier.fillMaxWidth(),
+        highlighted = true
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(AppDimens.Space4),
+            verticalAlignment = Alignment.Top
+        ) {
+            ProfileAvatar(
+                photoUri = photoUri,
+                displayName = session.username ?: session.email,
+                modifier = Modifier.size(92.dp)
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(AppDimens.Space1)
+            ) {
+                Text(
+                    text = session.username ?: "Rider APPBIKE",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Black,
+                    color = AppTextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "@${session.username ?: session.email.substringBefore('@')}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AppPrimaryBright,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = bio.ifBlank { "Añade una bio para contarle a la comunidad quién eres." },
+                    modifier = Modifier.padding(top = 7.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (bio.isBlank()) AppTextSecondary else AppTextPrimary
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = AppDimens.Space4),
+            horizontalArrangement = Arrangement.spacedBy(AppDimens.Space2)
+        ) {
+            ProfileStat(value = socialPostCount.toString(), label = "Posts", Modifier.weight(1f))
+            ProfileStat(value = bikeCount.toString(), label = "Bicis", Modifier.weight(1f))
+            ProfileStat(value = "—", label = "Rutas", Modifier.weight(1f))
+        }
+
+        if (isEditing) {
+            OutlinedTextField(
+                value = bioDraft,
+                onValueChange = onBioDraftChange,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = AppDimens.Space4)
+                    .appBikeTextFieldGlow(),
+                label = { Text("Tu bio") },
+                supportingText = { Text("Hasta 160 caracteres") },
+                minLines = 3,
+                maxLines = 5,
+                colors = appBikeTextFieldColors(),
+                shape = RoundedCornerShape(AppDimens.RadiusMedium)
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = AppDimens.Space2),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = onCancelBio) { Text("Cancelar") }
+                Button(onClick = onSaveBio) { Text("Guardar bio") }
+            }
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = AppDimens.Space3),
+                horizontalArrangement = Arrangement.spacedBy(AppDimens.Space2),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(
+                    modifier = Modifier.weight(1f),
+                    onClick = onPickPhoto
+                ) {
+                    Icon(Icons.Outlined.PhotoCamera, contentDescription = null)
+                    Spacer(Modifier.size(6.dp))
+                    Text("Cambiar foto")
+                }
+                TextButton(onClick = onEditBio) {
+                    Text(if (bio.isBlank()) "Añadir bio" else "Editar bio")
+                }
+            }
+        }
+
+        TextButton(
+            modifier = Modifier.fillMaxWidth(),
+            onClick = onOpenBikes
+        ) {
+            Icon(Icons.Outlined.PedalBike, contentDescription = null)
+            Spacer(Modifier.size(6.dp))
+            Text("Abrir Mi garaje")
+        }
+    }
+}
+
+@Composable
+private fun ProfileStat(value: String, label: String, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(AppDimens.RadiusMedium),
+        color = AppSurface,
+        border = BorderStroke(1.dp, AppBorderSubtle)
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+            Text(label, style = MaterialTheme.typography.labelSmall, color = AppTextSecondary)
+        }
+    }
+}
+
+@Composable
+internal fun ProfileAvatar(
+    photoUri: String,
+    displayName: String,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var bitmap by remember(photoUri) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(photoUri) {
+        bitmap = if (photoUri.isBlank()) {
+            null
+        } else {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(photoUri.toUri())?.use(
+                        BitmapFactory::decodeStream
+                    )
+                }.getOrNull()
+            }
+        }
+    }
+    Surface(
+        modifier = modifier,
+        shape = CircleShape,
+        color = AppPrimary,
+        border = BorderStroke(2.dp, AppPrimaryBright.copy(alpha = 0.80f))
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            val loaded = bitmap
+            if (loaded != null) {
+                Image(
+                    bitmap = loaded.asImageBitmap(),
+                    contentDescription = "Foto de perfil de $displayName",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Text(
+                    text = displayName.firstOrNull()?.uppercase() ?: "R",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    fontWeight = FontWeight.Black
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfileActionsCard(
+    session: AccountSession,
+    notificationsEnabled: Boolean,
+    onOpenNotificationSettings: () -> Unit,
+    onLogout: () -> Unit
+) {
+    AppCard(modifier = Modifier.fillMaxWidth()) {
+        Text("Cuenta y privacidad", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text(
+            "Sesión activa para ${session.email}",
+            modifier = Modifier.padding(top = 4.dp),
+            color = AppTextSecondary,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (!notificationsEnabled) {
+            Surface(
+                modifier = Modifier.padding(top = AppDimens.Space3),
+                shape = RoundedCornerShape(AppDimens.RadiusMedium),
+                color = AppErrorSoft
+            ) {
+                Column(
+                    modifier = Modifier.padding(AppDimens.Space3),
+                    verticalArrangement = Arrangement.spacedBy(AppDimens.Space1)
+                ) {
+                    Text(
+                        "Notificaciones desactivadas",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Text(
+                        "Actívalas para recibir mensajes cuando APPBIKE esté en segundo plano.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    TextButton(onClick = onOpenNotificationSettings) {
+                        Text("Abrir ajustes")
+                    }
+                }
+            }
+        }
+        OutlinedButton(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = AppDimens.Space3),
+            onClick = onLogout
+        ) {
+            Icon(Icons.AutoMirrored.Outlined.Logout, contentDescription = null)
+            Spacer(Modifier.size(8.dp))
+            Text("Cerrar sesión")
+        }
+    }
+}
 
 @Composable
 private fun AccountReferenceHeader(session: AccountSession?) {

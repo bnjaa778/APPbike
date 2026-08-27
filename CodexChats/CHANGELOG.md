@@ -1922,3 +1922,568 @@ Siguiente paso:
 
 - Confirmar el workflow de GitHub Actions de `master` y usar su APK debug si se
   desea una instalacion obtenida directamente desde GitHub.
+
+## 2026-08-21 - Inicio del rediseño UX/UI deportivo integral
+
+Objetivo:
+
+- Auditar e implementar progresivamente un rediseño comercial de APPbike que
+  refuerce ciclismo, movimiento, comunidad y descubrimiento; consolide el sistema
+  de diseño; unifique Mapa y Juntas; sincronice navegación inferior y swipe; y
+  conserve el estado de las vistas principales sin romper contratos remotos.
+
+Archivos y decisiones:
+
+- Se leyó el brief completo adjunto y se abrió un objetivo persistente dividido
+  en auditoría, sistema de diseño, navegación, pantallas, mapa/rutas,
+  microinteracciones, rendimiento y verificación.
+- Se detectaron cambios locales previos en `MainActivity.kt`, `HomeScreen.kt`,
+  `CommonComponents.kt`, tema y pruebas. Se conservarán y se trabajará sobre
+  ellos sin revertirlos.
+- La auditoría comienza por `MainActivity.kt` y continúa según el router de
+  `AGENTS.md` antes de modificar contratos o pantallas conectadas.
+
+Pruebas:
+
+- No ejecutadas en este punto inicial; la sesión se encontraba en auditoría de
+  arquitectura y del árbol de trabajo.
+
+Pendientes:
+
+- Completar auditoría, fijar plan técnico, implementar las fases, compilar,
+  ejecutar pruebas y realizar comprobación visual/accesible.
+
+Siguiente paso:
+
+- Revisar modelos, componentes, tema, feed, Cuenta/Perfil, Marketplace, Chat,
+  Mapa, persistencia local, conexiones remotas y pruebas existentes.
+
+## 2026-08-23 - Rediseño UX/UI deportivo integral completado
+
+Objetivo:
+
+- Completar el rediseño progresivo de APPbike con una experiencia deportiva,
+  social y fluida, cinco destinos persistentes, Mapa/Juntas unificados y estados
+  conservados sin alterar los contratos remotos existentes.
+
+Cambios:
+
+- La barra inferior y `HorizontalPager` usan Inicio, Marketplace, Mapa, Chat y
+  Perfil. Mapa es el centro visual, solo el destino activo muestra label y cada
+  elemento conserva nombre accesible completo.
+- Las cinco páginas quedan montadas, reciben `isActive` y difieren la carga
+  pesada hasta su primera activación. Chat detiene polling y MapLibre baja a 4
+  FPS cuando no están visibles.
+- Bicicletas se conserva como `Mi garaje` desde Perfil. Inicio, Marketplace,
+  Chat y Perfil se reorganizaron con jerarquías diferenciadas, filtros locales,
+  métricas honestas, skeletons y acceso directo Chat -> Junta en Mapa.
+- Las Juntas abren un bottom sheet. Se añadió `MeetupRoutePreview`, distancia
+  geodésica, ETA a 15 km/h, línea directa explícitamente estimada y apertura de
+  navegación ciclista externa. No se inventaron RSVP, participantes, dificultad,
+  desnivel ni actividad deportiva.
+- Se centralizaron tokens de movimiento/tamaño/elevación, se añadió caché LRU de
+  bitmaps decodificados de 24 MB y se retiraron cinco vectores de navegación sin
+  uso.
+- Se actualizaron `AGENTS.md`, estado, plan técnico, contrato mapa/market/chat,
+  informe de proyecto, auditorías antes/después y el informe de sesión.
+
+Pruebas:
+
+- `:app:testDebugUnitTest`: 59/59 correctas.
+- `:app:connectedDebugAndroidTest`: 33 casos, 0 fallos y 2 omisiones externas
+  esperadas por Chat/permisos de notificaciones.
+- `:app:assembleDebug`, `:app:assembleDebugAndroidTest` y `:app:lintDebug`:
+  correctos. Lint conserva 4 avisos informativos sin errores.
+- `git diff --check`: correcto.
+- Capturas posteriores a 100 % y 200 % en
+  `CodexChats/audits/2026-08-23-redesign-after/`.
+
+Pendientes:
+
+- Repetir la comparación visual autenticada cuando exista una cuenta de prueba
+  válida. El backend todavía debe ofrecer ruteo ciclista, métricas de actividad
+  y RSVP si el producto decide mostrarlos como datos reales.
+
+Siguiente paso:
+
+- Instalar el APK debug en un teléfono físico, iniciar sesión con una cuenta de
+  prueba y recorrer swipe, MapLibre y navegación externa con GPS real.
+
+## 2026-08-23 - Instalación solicitada en Samsung A23
+
+Objetivo:
+
+- Instalar y ejecutar el APK debug verificado en el teléfono físico del usuario.
+
+Cambios:
+
+- No se modificó código. Windows detectó `A23 de Benjamin` por USB/MTP, pero el
+  teléfono todavía no expone una interfaz ADB autorizada.
+
+Pruebas:
+
+- `adb devices -l`: solo aparece el emulador `emulator-5554`.
+- Windows PnP: Samsung A23 presente como MTP, módem y dispositivo USB compuesto.
+- `adb mdns services`: no hay dispositivos de depuración inalámbrica visibles.
+
+Pendientes:
+
+- Activar Depuración USB en el Samsung A23 y aceptar la huella RSA del equipo.
+
+Siguiente paso:
+
+- Repetir la detección ADB, instalar `app-debug.apk`, abrir `MainActivity` y
+  comprobar que no existan excepciones fatales ni ANR.
+
+## 2026-08-23 - APPbike ejecutada en Samsung A23
+
+Objetivo:
+
+- Instalar y abrir inmediatamente la build debug verificada en el teléfono
+  físico conectado.
+
+Cambios:
+
+- No se modificó código Android. Se instaló `app-debug.apk` como actualización
+  mediante ADB en el Samsung `SM_A235M`, conservando los datos existentes de la
+  aplicación.
+- Se detuvo la instancia anterior y se abrió `MainActivity` en el teléfono.
+
+Pruebas:
+
+- `adb -s R58T9039QBN install -r`: `Success`.
+- El proceso `com.example.appbike` quedó activo con PID `9539`.
+- `topResumedActivity`, `mCurrentFocus` y `mFocusedApp` apuntan a
+  `com.example.appbike/.MainActivity`.
+- El log posterior al arranque no contiene `FATAL EXCEPTION` ni ANR de APPbike.
+
+Pendientes:
+
+- Ninguno para la instalación y apertura solicitadas.
+
+Siguiente paso:
+
+- Recorrer en el teléfono el acceso, swipe entre destinos, Mapa y navegación
+  externa con la ubicación real del dispositivo.
+
+## 2026-08-23 - Trayectos independientes de Juntas
+
+Objetivo:
+
+- Permitir crear desde Mapa un trayecto a cualquier destino, marcar el camino
+  para bicicleta y mantenerlo separado de la creación/visualización de Juntas.
+
+Cambios:
+
+- Se añadieron acciones visibles `Trayecto` y `Junta`. Trayecto funciona sin
+  sesión; Junta conserva su acceso autenticado y formulario.
+- El usuario elige el destino con el buscador existente, usando título, ayuda y
+  etiqueta propios. El destino se recuerda sin cambiar la ubicación activa.
+- `CyclingRoutePreview` y `CyclingNavigation.kt` desacoplan el ruteo de las
+  Juntas. `RemoteConnections.loadCyclingRoute` obtiene una geometría ciclista
+  por calles desde FOSSGIS/OSRM sin Bearer.
+- MapLibre dibuja la geometría completa, marca el destino y encuadra el camino.
+  Distancia y ETA usan la respuesta del ruteador.
+- El cálculo se puede cancelar, descarta respuestas antiguas y usa una línea
+  directa claramente rotulada solo como respaldo.
+- `Cómo llegar` de una Junta reutiliza el planificador sin mezclar ambos flujos.
+- Se actualizaron AGENTS, estado, contrato mapa/market/chat e informe técnico.
+
+Pruebas:
+
+- Endpoint ciclista comprobado con una ruta de Santiago: HTTP 200 y geometría
+  GeoJSON válida.
+- Compilación principal y de androidTest correctas.
+- 59 pruebas unitarias correctas.
+- 13 pruebas instrumentadas dirigidas correctas tanto en AVD API 35 como en el
+  Samsung A23, sin fallos ni omisiones.
+- Matriz instrumentada completa en AVD API 35: 38 ejecutadas, 0 fallos y 2
+  omisiones opcionales de Chat.
+- `lintDebug`: correcto, con las 4 advertencias históricas de versión/icono y
+  ninguna advertencia nueva del planificador.
+- `assembleDebug`: correcto; `git diff --check` no detectó errores de espacios.
+- APK actualizado instalado mediante ADB en el Samsung A23 (`Success`). La app
+  inició con PID `25889` y el log posterior no contiene excepciones fatales ni
+  ANR.
+- Una repetición visual posterior en el teléfono no pudo montar las jerarquías
+  Compose porque el dispositivo permaneció bloqueado y en modo `Dozing`; las 7
+  pruebas no visuales sí avanzaron. Se conserva como evidencia física válida la
+  ejecución dirigida anterior de 13/13.
+
+Pendientes:
+
+- Desbloquear el Samsung para realizar la comprobación táctil del trayecto con
+  la ubicación real; el APK ya está instalado e iniciado detrás del bloqueo.
+
+Siguiente paso:
+
+- Desbloquear el teléfono y probar un destino real desde `Mapa > Trayecto`.
+
+## 2026-08-26 - Actualización de Codex solicitada
+
+Objetivo:
+
+- Actualizar la aplicación Codex/ChatGPT y confirmar que el agente use la
+  familia de modelo vigente.
+
+Cambios:
+
+- No se modificó código de APPbike.
+- Se ejecutó la comprobación integrada `Ayuda > Buscar actualizaciones`.
+- La configuración personal ya seleccionaba `gpt-5.6-sol` con razonamiento
+  `xhigh`; no fue necesario modificarla.
+
+Pruebas:
+
+- Versión instalada detectada: `26.810.7004.0`.
+- Microsoft Store informó una actualización disponible a `26.820.7780.0`.
+- La descarga silenciosa no está permitida en este equipo, por lo que la
+  instalación debe pasar por Microsoft Store y reiniciar la aplicación.
+- Microsoft Store descargó el paquete completo; la primera aplicación terminó
+  en `La aplicación estaba en uso`, condición esperada mientras esta tarea siga
+  abierta en Codex.
+
+Pendientes:
+
+- Cerrar Codex, aplicar el paquete ya descargado, reabrir la app y verificar la
+  versión efectiva.
+
+Siguiente paso:
+
+- Completar la actualización mediante el reinicio automatizado de la aplicación.
+
+## 2026-08-26 - Rediseño integral UX/UI de AppBike
+
+Objetivo:
+
+- Aplicar el brief de rediseño social, deportivo e inmersivo manteniendo los
+  contratos remotos existentes y separando Marketplace del feed de Inicio.
+
+Cambios:
+
+- Home ahora consulta solo Juntas activas para el feed comunitario y muestra un
+  hero de cuatro fotografías locales de ciclismo con cambio automático cada 4
+  segundos y crossfade de 300 ms.
+- Se retiró el botón superior de Perfil; la barra inferior queda como único
+  acceso principal a Cuenta/Perfil y se ajustaron los iconos a 24/28 dp.
+- Perfil prioriza avatar, nombre, bio, estadísticas honestas y contenido. La
+  foto y bio se guardan por UUID; se añadió un compositor local de publicaciones
+  personales con foto o video que vuelve a aparecer en Inicio.
+- Mapa conserva el planificador interno y sus contratos, pero las acciones
+  `Trayecto`/`Junta` ahora usan un control flotante más compacto y semitransparente.
+- Splash mantiene el logo centrado a tamaño constante y usa solo fade-out.
+- Se actualizaron `AGENTS.md`, `docs/PROJECT_REPORT.md`,
+  `docs/MAP_MARKETPLACE_CHAT.md` y `docs/UX_UI_REDESIGN_PLAN.md`.
+
+Pruebas:
+
+- `:app:compileDebugKotlin`: correcto.
+- `:app:testDebugUnitTest`: 59/59 correctas.
+- `:app:assembleDebug`, `:app:assembleDebugAndroidTest` y `:app:lintDebug`:
+  correctos.
+- `:app:connectedDebugAndroidTest`: 38 casos, 0 fallos y 2 omisiones externas
+  esperadas de Chat/notificaciones.
+- Instalación en AVD `APPbike_API_35` correcta; splash y pantalla de acceso
+  inspeccionados visualmente; logcat reciente sin `FATAL EXCEPTION` ni ANR.
+- `git diff --check`: correcto.
+
+Pendientes:
+
+- Las publicaciones sociales son locales mientras el backend no ofrezca el
+  contrato social; todavía no sincronizan entre dispositivos ni cuentas.
+- Falta repetir la revisión autenticada en un teléfono físico desbloqueado y
+  validar el flujo de video con multimedia real.
+
+Siguiente paso:
+
+- Definir y desplegar el contrato remoto de publicaciones sociales si se
+  requiere sincronización entre riders; después conectar el compositor local a
+  ese contrato con validación de propietario.
+
+## 2026-08-26 - Ejecución en teléfono físico
+
+Objetivo:
+
+- Instalar y abrir la versión Debug del rediseño en el teléfono Android
+  conectado por ADB.
+
+Cambios:
+
+- Se compiló `app-debug.apk`, se instaló sobre `R58T9039QBN` (`SM-A235M`) y se
+  abrió `com.example.appbike/.MainActivity`.
+
+Pruebas:
+
+- `:app:assembleDebug`: correcto.
+- ADB confirmó la actividad principal en primer plano.
+
+Pendientes:
+
+- Revisar en el teléfono los flujos autenticados y el multimedia real cuando
+  el usuario los pruebe.
+
+Siguiente paso:
+
+- Recibir observaciones visuales o funcionales desde el dispositivo físico.
+
+## 2026-08-26 - Foto de perfil en la barra inferior
+
+Objetivo:
+
+- Mostrar en el botón Perfil la fotografía configurada por el usuario.
+
+Cambios:
+
+- La barra inferior reutiliza el avatar del perfil activo y carga la foto
+  guardada por UUID en `LocalDataStore`.
+- “Cambiar foto” actualiza el avatar de navegación inmediatamente; sin foto se
+  conserva la inicial del usuario.
+
+Pruebas:
+
+- `:app:compileDebugKotlin`: correcto.
+- `:app:testDebugUnitTest`: 59/59 correctas.
+- `:app:assembleDebug`: correcto.
+- APK reinstalado en `SM-A235M`; `MainActivity` confirmada en primer plano.
+
+Pendientes:
+
+- Confirmar visualmente en el dispositivo después de seleccionar una nueva
+  fotografía.
+
+Siguiente paso:
+
+- Probar “Cambiar foto” en Perfil y volver a Inicio/Marketplace para comprobar
+  la actualización persistente del avatar.
+
+## 2026-08-26 - Ajuste de tamaño y centrado del avatar de Perfil
+
+Objetivo:
+
+- Hacer más visible la foto circular del usuario en la barra inferior.
+
+Cambios:
+
+- El avatar de Perfil se aumentó a 30 dp y conserva el recorte circular,
+  centrado dentro del contenedor seleccionado.
+
+Pruebas:
+
+- `:app:assembleDebug`: correcto.
+- La foto se confirmó cargando en el botón Perfil antes de ajustar el tamaño.
+
+Pendientes:
+
+- Reinstalar esta última compilación en el teléfono: ADB perdió la conexión
+  durante la transferencia y el dispositivo quedó desconectado.
+
+Siguiente paso:
+
+- Desbloquear el teléfono, reconectar el cable USB y aceptar nuevamente la
+  autorización de depuración si Android la solicita.
+
+## 2026-08-26 - Reintento de instalación tras autorización USB
+
+Objetivo:
+
+- Instalar y abrir la compilación con el avatar aumentado en el teléfono.
+
+Cambios:
+
+- Se verificó que el dispositivo `R58T9039QBN` reapareciera autorizado y se
+  intentó reinstalar `app-debug.apk`.
+
+Pruebas:
+
+- El APK continúa compilando correctamente.
+- La transferencia ADB quedó sin respuesta; al reiniciar el puente el teléfono
+  volvió a estado desconectado.
+
+Pendientes:
+
+- Requerir una reconexión física del cable USB o cambiar a otro puerto/cable
+  para completar la instalación.
+
+Siguiente paso:
+
+- Volver a ejecutar la instalación cuando `adb devices` muestre el teléfono como
+  `device` estable.
+
+## 2026-08-26 - Instalación final del avatar ajustado
+
+Objetivo:
+
+- Completar la instalación física y validar el avatar circular ampliado.
+
+Cambios:
+
+- Se transfirió e instaló el APK actualizado en `R58T9039QBN` (`SM-A235M`) y
+  se abrió APPbike.
+
+Pruebas:
+
+- `pm install -r -d`: correcto.
+- `MainActivity` confirmada en primer plano.
+- Captura física validó la foto de perfil visible, circular, centrada y de 30 dp
+  en la barra inferior.
+
+Pendientes:
+
+- Ninguno para este ajuste.
+
+Siguiente paso:
+
+- Recibir nuevas observaciones de diseño o comportamiento.
+
+## 2026-08-26 - Corrección de fotos de “Tu próxima aventura”
+
+Objetivo:
+
+- Hacer visibles las cuatro fotografías del carrusel principal de Inicio.
+
+Cambios:
+
+- Se corrigió la medición del contenido de `Crossfade`: ahora el contenedor y
+  la imagen ocupan toda la tarjeta hero antes de aplicar el degradado.
+
+Pruebas:
+
+- `:app:assembleDebug`: correcto.
+- APK transferido e instalado en `R58T9039QBN` (`SM-A235M`).
+- `MainActivity` confirmada en primer plano.
+- Captura física confirmó la fotografía visible en “Tu próxima aventura”.
+
+Pendientes:
+
+- Ninguno para la carga de las fotografías del hero.
+
+Siguiente paso:
+
+- Recibir nuevas observaciones visuales del carrusel.
+
+## 2026-08-26 - Pronóstico climático integrado y hero compacto
+
+Objetivo:
+
+- Reducir el cuadro “Tu próxima aventura” y mostrar el pronóstico de seis días
+  desde el botón climático, sin abrir páginas externas.
+
+Cambios:
+
+- El hero de Inicio quedó más compacto, con una altura entre 360 y 400 dp, y
+  conserva las fotografías del carrusel correctamente medidas.
+- El botón climático abre un `DropdownMenu` animado anclado a la cabecera, en la
+  esquina de la ventana, con temperatura máxima/mínima, estado del cielo y
+  probabilidad de lluvia para seis días.
+- El pronóstico usa `loadWeatherForecast` en `Dispatchers.IO`, conserva la
+  atribución visible a Open-Meteo y maneja carga, error y cierre dentro de la
+  app.
+- Se corrigió el arranque para que Android no cierre APPbike si rechaza iniciar
+  el servicio opcional de notificaciones en segundo plano.
+
+Pruebas:
+
+- `:app:compileDebugKotlin :app:testDebugUnitTest`: correcto.
+- `:app:connectedDebugAndroidTest`: 40 pruebas, 0 fallos y 2 omitidas por
+  depender de cuenta/servicios reales.
+- Se verificó la interacción del botón y la aparición de “Pronóstico de 6 días”
+  en instrumentación.
+- APK final instalado en `R58T9039QBN` (`SM-A235M`) con `pm install -r -d`.
+
+Pendientes:
+
+- La comprobación visual final en el Samsung queda pendiente de desbloquear el
+  teléfono; durante la instalación remota estaba en la pantalla de bloqueo.
+
+Siguiente paso:
+
+- Desbloquear el Samsung y tocar el chip climático para revisar el panel en la
+  pantalla física.
+
+## 2026-08-26 - Splash con estrellas y logo estable
+
+Objetivo:
+
+- Evitar que el logo cambie de tamaño o se descuadre al pasar del splash a la
+  verificación de sesión, conservando la animación de estrellas blancas.
+
+Cambios:
+
+- Se unificó el tamaño del emblema en `220.dp` para `LaunchBrandScreen` y
+  `SessionValidationScreen`.
+- Se restauraron las 40 partículas LED blancas que parten desde las cuatro
+  esquinas, giran durante el recorrido y convergen sobre el emblema.
+- El logo ya no usa una escala variable: aparece progresivamente con tamaño
+  fijo mientras las partículas se disipan.
+
+Pruebas:
+
+- `:app:compileDebugKotlin :app:testDebugUnitTest`: correcto.
+- `:app:assembleDebug`: correcto.
+- Capturas del emulador durante la animación confirmaron partículas visibles y
+  el logo alineado con la pantalla posterior.
+
+Pendientes:
+
+- La revisión visual en el Samsung requiere desbloquear el teléfono.
+
+Siguiente paso:
+
+- Desbloquear el teléfono y confirmar el splash en el dispositivo físico.
+
+## 2026-08-26 - Convergencia lenta del splash
+
+Objetivo:
+
+- Dar más tiempo a las estrellas para formar claramente el logo durante el
+  arranque.
+
+Cambios:
+
+- La animación de partículas pasó de 2.200 ms a 3.600 ms.
+- La duración total del splash se ajustó a 4.000 ms para que el logo formado
+  permanezca visible antes de “Verificando sesión…”.
+- Se conservó el tamaño fijo de 220 dp y el recorrido giratorio desde las
+  cuatro esquinas.
+
+Pruebas:
+
+- `:app:compileDebugKotlin :app:testDebugUnitTest :app:assembleDebug`: correcto.
+- APK instalado y APPbike lanzada en el Samsung `R58T9039QBN` (`SM-A235M`),
+  proceso activo y sin crash.
+
+Pendientes:
+
+- La captura física requiere desbloquear el Samsung.
+
+Siguiente paso:
+
+- Revisar la velocidad en el teléfono desbloqueado y ajustar nuevamente solo
+  si la percepción visual lo requiere.
+
+## 2026-08-26 - Segundo ajuste de velocidad del splash
+
+Objetivo:
+
+- Ralentizar un poco más la formación de las estrellas para que el logo se
+  reconozca antes de cambiar a la verificación de sesión.
+
+Cambios:
+
+- La animación de partículas pasó de 3.600 ms a 4.500 ms.
+- La duración total del splash pasó de 4.000 ms a 5.000 ms.
+- Se conservó el logo fijo de 220 dp, el giro y la convergencia desde las
+  cuatro esquinas.
+
+Pruebas:
+
+- `:app:compileDebugKotlin :app:testDebugUnitTest :app:assembleDebug`: correcto.
+- APK instalado y APPbike lanzada en `R58T9039QBN` (`SM-A235M`), sin crash.
+
+Pendientes:
+
+- La captura visual en el Samsung requiere desbloquear el dispositivo.
+
+Siguiente paso:
+
+- Revisar la nueva velocidad en el teléfono desbloqueado.

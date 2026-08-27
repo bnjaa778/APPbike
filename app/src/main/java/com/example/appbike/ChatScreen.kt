@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -30,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -45,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.appbike.ui.theme.AppBorderSubtle
 import com.example.appbike.ui.theme.AppPrimaryBright
@@ -75,7 +78,9 @@ fun ChatScreen(
     account: AccountSession?,
     initialChat: UserChat? = null,
     onInitialChatConsumed: () -> Unit = {},
-    onOpenAccount: () -> Unit = {}
+    onOpenAccount: () -> Unit = {},
+    onOpenMeetup: (String) -> Unit = {},
+    isActive: Boolean = true
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -89,6 +94,7 @@ fun ChatScreen(
     var syncingMessageChatId by remember(accountKey) { mutableStateOf<String?>(null) }
     var sendingMessageChatId by remember(accountKey) { mutableStateOf<String?>(null) }
     var error by remember(accountKey) { mutableStateOf<String?>(null) }
+    var hasLoaded by remember(accountKey) { mutableStateOf(false) }
     val chatListMutex = remember(accountKey) { Mutex() }
     val chatOperationMutexes = remember(accountKey) { mutableMapOf<String, Mutex>() }
 
@@ -237,7 +243,8 @@ fun ChatScreen(
         messages.clear()
     }
 
-    LaunchedEffect(account?.userId) {
+    LaunchedEffect(account?.userId, isActive) {
+        if (!isActive || hasLoaded) return@LaunchedEffect
         chats.clear()
         messages.clear()
         selectedChat = null
@@ -248,9 +255,11 @@ fun ChatScreen(
         }
         chats.addAll(local)
         refreshChatList(session, initialLoad = true)
+        hasLoaded = true
     }
 
-    LaunchedEffect(account?.userId, initialChat?.id) {
+    LaunchedEffect(account?.userId, initialChat?.id, isActive) {
+        if (!isActive) return@LaunchedEffect
         val session = account ?: return@LaunchedEffect
         val target = initialChat ?: return@LaunchedEffect
         if (chats.none { it.id == target.id }) {
@@ -264,7 +273,8 @@ fun ChatScreen(
         onInitialChatConsumed()
     }
 
-    LaunchedEffect(account?.userId, selectedChat?.id) {
+    LaunchedEffect(account?.userId, selectedChat?.id, isActive) {
+        if (!isActive) return@LaunchedEffect
         val session = account ?: return@LaunchedEffect
         val activeChat = selectedChat ?: return@LaunchedEffect
         val local = withContext(Dispatchers.IO) {
@@ -379,6 +389,7 @@ fun ChatScreen(
                 loading = syncingMessageChatId == activeChat.id,
                 sending = sendingMessageChatId == activeChat.id,
                 error = error,
+                onOpenMeetup = onOpenMeetup,
                 onBack = {
                     selectedChat = null
                     messages.clear()
@@ -544,17 +555,54 @@ private fun ChatRow(chat: UserChat, currentUserId: String, onClick: () -> Unit) 
         tonalElevation = 0.dp,
         shadowElevation = 0.dp
     ) {
-        Column(Modifier.padding(AppDimens.Space4)) {
-            Text(
-                chatDisplayTitle(chat, currentUserId),
-                fontWeight = FontWeight.Bold,
-                color = AppTextPrimary
-            )
-            Text(
-                chat.lastMessage.ifBlank { "Sin mensajes" },
-                maxLines = 1,
-                color = AppTextSecondary
-            )
+        Row(
+            modifier = Modifier.padding(AppDimens.Space4),
+            horizontalArrangement = Arrangement.spacedBy(AppDimens.Space3),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = AppPrimarySoft
+            ) {
+                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = if (chat.type == ChatType.MARKETPLACE) {
+                            Icons.Outlined.Storefront
+                        } else {
+                            Icons.AutoMirrored.Outlined.DirectionsBike
+                        },
+                        contentDescription = null,
+                        tint = AppPrimaryBright
+                    )
+                }
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(AppDimens.Space1)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = chatDisplayTitle(chat, currentUserId),
+                        modifier = Modifier.weight(1f),
+                        fontWeight = FontWeight.Bold,
+                        color = AppTextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = if (chat.type == ChatType.MARKETPLACE) "COMPRA" else "JUNTA",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = AppPrimaryBright
+                    )
+                }
+                Text(
+                    text = chat.lastMessage.ifBlank { "Sin mensajes" },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = AppTextSecondary
+                )
+            }
         }
     }
 }
@@ -567,6 +615,7 @@ private fun ConversationView(
     loading: Boolean,
     sending: Boolean,
     error: String?,
+    onOpenMeetup: (String) -> Unit,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onSend: (String, () -> Unit) -> Unit
@@ -596,6 +645,40 @@ private fun ConversationView(
             )
             IconButton(onClick = onRefresh, enabled = !loading) {
                 Icon(Icons.Outlined.Refresh, contentDescription = "Actualizar conversación")
+            }
+        }
+        if (chat.type == ChatType.SOCIAL && !chat.relatedEntityId.isNullOrBlank()) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = AppDimens.Space3),
+                shape = RoundedCornerShape(AppDimens.RadiusMedium),
+                color = AppPrimarySoft,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    AppPrimaryBright.copy(alpha = 0.28f)
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = AppDimens.Space3),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Outlined.DirectionsBike,
+                        contentDescription = null,
+                        tint = AppPrimaryBright
+                    )
+                    Text(
+                        text = "Chat de junta",
+                        modifier = Modifier.weight(1f).padding(start = AppDimens.Space2),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = AppTextPrimary
+                    )
+                    TextButton(onClick = { onOpenMeetup(chat.relatedEntityId) }) {
+                        Text("Ver en mapa")
+                    }
+                }
             }
         }
         LazyColumn(

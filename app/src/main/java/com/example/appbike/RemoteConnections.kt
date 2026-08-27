@@ -18,6 +18,7 @@ import java.util.Locale
 import java.util.UUID
 import androidx.core.net.toUri
 import kotlin.math.atan2
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -27,6 +28,8 @@ object RemoteConnections {
     private const val API_URL = "https://api.zizzio.cl/APIS/AppBikeExternal.php"
     private const val PUBLIC_BASE_URL = "https://api.zizzio.cl/"
     private const val OPEN_STREET_MAP_GEOCODER = "https://nominatim.openstreetmap.org"
+    private const val OPEN_STREET_MAP_BIKE_ROUTER =
+        "https://routing.openstreetmap.de/routed-bike"
     private const val OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
     private const val GEOCODER_USER_AGENT = "APPbike-Android/1.0 (https://zizzio.cl)"
     private val PUBLIC_ACTIONS = setOf(
@@ -713,6 +716,78 @@ object RemoteConnections {
 
     fun searchLocation(query: String): GeoPoint = searchLocations(query).firstOrNull()
         ?: throw RemoteConnectionException("No se encontró esa ubicación.")
+
+    fun loadCyclingRoute(
+        origin: GeoPoint,
+        destination: GeoPoint,
+        connectTimeoutMs: Int = 12_000,
+        readTimeoutMs: Int = 20_000
+    ): CyclingRoutePreview {
+        requireValidRoutePoint(origin, "origen")
+        requireValidRoutePoint(destination, "destino")
+        val coordinates = "${origin.longitude},${origin.latitude};" +
+            "${destination.longitude},${destination.latitude}"
+        val url = "$OPEN_STREET_MAP_BIKE_ROUTER/route/v1/driving/$coordinates" +
+            "?overview=full&geometries=geojson&steps=false"
+        val response = executePublicJsonGet(
+            url = url,
+            failureMessage = "No fue posible calcular el trayecto ciclista.",
+            connectTimeoutMs = connectTimeoutMs,
+            readTimeoutMs = readTimeoutMs
+        )
+        return cyclingRouteFromJson(origin, destination, response)
+    }
+
+    internal fun cyclingRouteFromJson(
+        origin: GeoPoint,
+        destination: GeoPoint,
+        response: JSONObject
+    ): CyclingRoutePreview {
+        if (!response.optString("code").equals("Ok", ignoreCase = true)) {
+            throw RemoteConnectionException("No se encontró un camino ciclista hasta ese destino.")
+        }
+        val route = response.optJSONArray("routes")?.optJSONObject(0)
+            ?: throw RemoteConnectionException("El servicio no devolvió un trayecto utilizable.")
+        val coordinates = route.optJSONObject("geometry")?.optJSONArray("coordinates")
+            ?: throw RemoteConnectionException("El trayecto no incluyó una geometría válida.")
+        val geometry = buildList {
+            for (index in 0 until coordinates.length()) {
+                val coordinate = coordinates.optJSONArray(index) ?: continue
+                val longitude = coordinate.optDouble(0, Double.NaN)
+                val latitude = coordinate.optDouble(1, Double.NaN)
+                if (latitude.isFinite() && longitude.isFinite() &&
+                    latitude in -90.0..90.0 && longitude in -180.0..180.0
+                ) {
+                    add(GeoPoint(latitude, longitude))
+                }
+            }
+        }
+        if (geometry.size < 2) {
+            throw RemoteConnectionException("El trayecto no incluyó suficientes puntos.")
+        }
+        val distanceKm = route.optDouble("distance", Double.NaN) / 1_000.0
+        val durationSeconds = route.optDouble("duration", Double.NaN)
+        if (!distanceKm.isFinite() || distanceKm <= 0.0 ||
+            !durationSeconds.isFinite() || durationSeconds <= 0.0
+        ) {
+            throw RemoteConnectionException("El trayecto no incluyó distancia ni duración válidas.")
+        }
+        return CyclingRoutePreview(
+            origin = origin,
+            destination = destination,
+            distanceKm = distanceKm,
+            estimatedMinutes = ceil(durationSeconds / 60.0).toInt().coerceAtLeast(1),
+            geometry = geometry,
+            source = CyclingRouteSource.OPEN_STREET_MAP
+        )
+    }
+
+    private fun requireValidRoutePoint(point: GeoPoint, name: String) {
+        require(
+            point.latitude.isFinite() && point.longitude.isFinite() &&
+                point.latitude in -90.0..90.0 && point.longitude in -180.0..180.0
+        ) { "El $name del trayecto no tiene coordenadas válidas." }
+    }
 
     fun searchLocations(
         query: String,
@@ -1615,6 +1690,86 @@ object RemoteConnections {
             failureMessage = "No fue posible obtener el tiempo actual."
         )
         return weatherFromJson(response, latitude, longitude)
+    }
+
+    fun loadWeatherForecast(latitude: Double, longitude: Double): WeatherForecast {
+        require(latitude.isFinite() && latitude in -90.0..90.0) {
+            "Latitud meteorológica inválida."
+        }
+        require(longitude.isFinite() && longitude in -180.0..180.0) {
+            "Longitud meteorológica inválida."
+        }
+        val latitudeValue = String.format(Locale.US, "%.5f", latitude)
+        val longitudeValue = String.format(Locale.US, "%.5f", longitude)
+        val url = "$OPEN_METEO_FORECAST_URL" +
+            "?latitude=$latitudeValue" +
+            "&longitude=$longitudeValue" +
+            "&daily=weather_code,temperature_2m_max,temperature_2m_min," +
+            "precipitation_probability_max" +
+            "&forecast_days=6" +
+            "&temperature_unit=celsius&timezone=auto"
+        val response = executePublicJsonGet(
+            url = url,
+            failureMessage = "No fue posible obtener el pronóstico del tiempo."
+        )
+        return weatherForecastFromJson(response, latitude, longitude)
+    }
+
+    internal fun weatherForecastFromJson(
+        response: JSONObject,
+        requestedLatitude: Double,
+        requestedLongitude: Double
+    ): WeatherForecast {
+        val daily = response.optJSONObject("daily")
+            ?: throw RemoteConnectionException("El servicio meteorológico no devolvió pronóstico.")
+        val dates = daily.optJSONArray("time")
+        val codes = daily.optJSONArray("weather_code")
+        val maxTemperatures = daily.optJSONArray("temperature_2m_max")
+        val minTemperatures = daily.optJSONArray("temperature_2m_min")
+        val precipitationProbabilities = daily.optJSONArray("precipitation_probability_max")
+        if (dates == null || codes == null || maxTemperatures == null || minTemperatures == null) {
+            throw RemoteConnectionException("El servicio meteorológico devolvió un pronóstico incompleto.")
+        }
+
+        val itemCount = minOf(
+            dates.length(),
+            codes.length(),
+            maxTemperatures.length(),
+            minTemperatures.length(),
+            6
+        )
+        val days = (0 until itemCount).mapNotNull { index ->
+            val date = dates.optString(index).trim()
+            val weatherCode = codes.optInt(index, -1)
+            val maximum = maxTemperatures.optDouble(index, Double.NaN)
+            val minimum = minTemperatures.optDouble(index, Double.NaN)
+            if (date.isBlank() || weatherCode < 0 || !maximum.isFinite() || !minimum.isFinite()) {
+                return@mapNotNull null
+            }
+            WeatherForecastDay(
+                date = date,
+                weatherCode = weatherCode,
+                condition = weatherConditionForWmoCode(weatherCode),
+                temperatureMaxCelsius = maximum,
+                temperatureMinCelsius = minimum,
+                precipitationProbabilityPercent = precipitationProbabilities
+                    ?.optInt(index, 0)
+                    ?.coerceIn(0, 100)
+                    ?: 0
+            )
+        }
+        if (days.isEmpty()) {
+            throw RemoteConnectionException("El servicio meteorológico no devolvió días válidos.")
+        }
+        return WeatherForecast(
+            days = days,
+            latitude = response.optDouble("latitude", requestedLatitude)
+                .takeIf(Double::isFinite)
+                ?: requestedLatitude,
+            longitude = response.optDouble("longitude", requestedLongitude)
+                .takeIf(Double::isFinite)
+                ?: requestedLongitude
+        )
     }
 
     internal fun weatherFromJson(

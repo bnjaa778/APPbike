@@ -98,6 +98,24 @@ data class GeoPoint(
     val currencyCode: String = ""
 )
 
+enum class CyclingRouteSource {
+    OPEN_STREET_MAP,
+    DIRECT_FALLBACK
+}
+
+data class CyclingRoutePreview(
+    val origin: GeoPoint,
+    val destination: GeoPoint,
+    val distanceKm: Double,
+    val estimatedMinutes: Int,
+    val geometry: List<GeoPoint>,
+    val source: CyclingRouteSource,
+    val averageSpeedKmh: Double? = null
+) {
+    val isDirectEstimate: Boolean
+        get() = source == CyclingRouteSource.DIRECT_FALLBACK
+}
+
 enum class WeatherCondition {
     CLEAR,
     PARTLY_CLOUDY,
@@ -121,6 +139,21 @@ data class WeatherSnapshot(
     val cloudCoverPercent: Int,
     val precipitationMillimeters: Double,
     val observedAt: String,
+    val latitude: Double,
+    val longitude: Double
+)
+
+data class WeatherForecastDay(
+    val date: String,
+    val weatherCode: Int,
+    val condition: WeatherCondition,
+    val temperatureMaxCelsius: Double,
+    val temperatureMinCelsius: Double,
+    val precipitationProbabilityPercent: Int
+)
+
+data class WeatherForecast(
+    val days: List<WeatherForecastDay>,
     val latitude: Double,
     val longitude: Double
 )
@@ -175,6 +208,16 @@ data class MeetupEvent(
     val countryCode: String = "",
     val administrativeArea: String = "",
     val createdByUsername: String? = null
+)
+
+data class SocialPost(
+    val id: String,
+    val userId: String,
+    val username: String,
+    val caption: String,
+    val mediaUri: String,
+    val mediaType: String = "photo",
+    val createdAt: Long = 0L
 )
 
 enum class ChatType { SOCIAL, MARKETPLACE }

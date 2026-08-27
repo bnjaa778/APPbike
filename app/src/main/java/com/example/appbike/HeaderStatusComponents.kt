@@ -1,15 +1,25 @@
 package com.example.appbike
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -23,6 +33,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -37,6 +48,8 @@ import com.example.appbike.ui.theme.AppTextSecondary
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import java.text.SimpleDateFormat
+import java.util.Locale
 
 internal sealed interface WeatherHeaderState {
     data object WaitingForLocation : WeatherHeaderState
@@ -45,10 +58,18 @@ internal sealed interface WeatherHeaderState {
     data class Unavailable(val reason: String) : WeatherHeaderState
 }
 
+internal sealed interface WeatherForecastState {
+    data object Idle : WeatherForecastState
+    data object Loading : WeatherForecastState
+    data class Ready(val forecast: WeatherForecast) : WeatherForecastState
+    data class Unavailable(val reason: String) : WeatherForecastState
+}
+
 @Composable
 internal fun WeatherStatusChip(
     state: WeatherHeaderState,
-    compact: Boolean
+    compact: Boolean,
+    onClick: (() -> Unit)? = null
 ) {
     val ready = state as? WeatherHeaderState.Ready
     val temperature = ready?.snapshot?.temperatureCelsius?.roundToInt()
@@ -65,13 +86,21 @@ internal fun WeatherStatusChip(
             "$label, $temperature grados Celsius. Datos de Open-Meteo."
     }
 
-    Surface(
-        modifier = Modifier
-            .width(if (compact) 72.dp else 92.dp)
-            .height(if (compact) 40.dp else 48.dp)
-            .clearAndSetSemantics {
+    val chipModifier = Modifier
+        .width(if (compact) 72.dp else 92.dp)
+        .height(if (compact) 40.dp else 48.dp)
+        .then(
+            onClick?.let { action ->
+                Modifier
+                    .clickable(onClick = action)
+                    .semantics { contentDescription = spokenDescription }
+            } ?: Modifier.clearAndSetSemantics {
                 contentDescription = spokenDescription
-            },
+            }
+        )
+
+    Surface(
+        modifier = chipModifier,
         shape = MaterialTheme.shapes.medium,
         color = AppSurfaceElevated,
         border = androidx.compose.foundation.BorderStroke(1.dp, AppBorderSubtle)
@@ -130,6 +159,136 @@ internal fun WeatherStatusChip(
             }
         }
     }
+}
+
+@Composable
+internal fun WeatherForecastPanel(
+    state: WeatherForecastState,
+    onClose: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .heightIn(max = 440.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Pronóstico de 6 días",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Black,
+                    color = AppTextPrimary
+                )
+                Text(
+                    "Tiempo en tu ubicación",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AppTextSecondary
+                )
+            }
+            IconButton(onClick = onClose) {
+                Icon(Icons.Outlined.Close, contentDescription = "Cerrar pronóstico")
+            }
+        }
+
+        when (state) {
+            WeatherForecastState.Idle -> Text(
+                "Abriendo el pronóstico…",
+                color = AppTextSecondary,
+                style = MaterialTheme.typography.bodySmall
+            )
+            WeatherForecastState.Loading -> Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(22.dp),
+                    color = AppPrimaryBright,
+                    strokeWidth = 2.dp
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Actualizando…", color = AppTextSecondary)
+            }
+            is WeatherForecastState.Unavailable -> Text(
+                state.reason,
+                color = AppTextSecondary,
+                style = MaterialTheme.typography.bodySmall
+            )
+            is WeatherForecastState.Ready -> state.forecast.days.forEach { day ->
+                WeatherForecastDayRow(day)
+            }
+        }
+
+        Text(
+            "Open-Meteo",
+            color = AppPrimaryBright,
+            style = MaterialTheme.typography.labelSmall
+        )
+    }
+}
+
+@Composable
+private fun WeatherForecastDayRow(day: WeatherForecastDay) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = AppSurfaceElevated.copy(alpha = 0.72f),
+        shape = MaterialTheme.shapes.small,
+        border = androidx.compose.foundation.BorderStroke(1.dp, AppBorderSubtle.copy(alpha = 0.72f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(9.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    weatherForecastDayLabel(day.date),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = AppTextPrimary
+                )
+                Text(
+                    buildString {
+                        append(weatherConditionLabel(day.condition, true))
+                        if (day.precipitationProbabilityPercent > 0) {
+                            append(" · ${day.precipitationProbabilityPercent}% lluvia")
+                        }
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AppTextSecondary,
+                    maxLines = 1
+                )
+            }
+            WeatherGlyph(
+                condition = day.condition,
+                isDay = true,
+                modifier = Modifier.size(25.dp)
+            )
+            Text(
+                "${day.temperatureMaxCelsius.roundToInt()}° / ${day.temperatureMinCelsius.roundToInt()}°",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Black,
+                color = AppTextPrimary
+            )
+        }
+    }
+}
+
+private fun weatherForecastDayLabel(date: String): String {
+    val locale = Locale.forLanguageTag("es-CL")
+    val parsed = runCatching {
+        SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(date)
+    }.getOrNull()
+    return parsed?.let {
+        SimpleDateFormat("EEE d", locale).format(it).replaceFirstChar { first ->
+            first.titlecase(locale)
+        }
+    } ?: date
 }
 
 @Composable
