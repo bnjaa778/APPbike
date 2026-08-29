@@ -4,7 +4,7 @@ Este archivo es la entrada principal para trabajar en APPbike. Usalo como
 router: antes de editar, identifica el tipo de tarea, abre primero los archivos
 indicados y conserva los contratos documentados aqui.
 
-Ultima revision del proyecto: 2026-08-26.
+Ultima revision del proyecto: 2026-08-28.
 
 ## Regla de oro
 
@@ -116,6 +116,12 @@ Ultima revision del proyecto: 2026-08-26.
   busquedas y estado, pero cada pantalla recibe `isActive` y difiere su primera
   carga de red hasta ser visible. El polling de Chat solo corre cuando Chat esta
   activo.
+- En `ROUTES`, el lienzo del mapa reserva sus gestos horizontales para MapLibre;
+  el desplazamiento del pager sigue disponible al iniciar el gesto sobre los
+  controles Compose de busqueda, capas y acciones principales.
+- El destino actual se conserva durante recreaciones de la actividad. Las
+  navegaciones rapidas esperan la pagina asentada antes de sincronizar estado,
+  y el boton Atrás del sistema cierra `Mi garaje` hacia Perfil.
 - En horizontal, la cabecera usa la firma `APPBIKE   RIDE • CONNECT` en una
   linea y la barra inferior mide 56 dp con iconos de 24 dp sin etiqueta visual.
   Los cinco iconos deben conservar su `contentDescription` completo.
@@ -192,7 +198,9 @@ Capa remota centralizada con `HttpURLConnection` y `org.json`.
    `UnauthenticatedAccessScreen` a pantalla completa, sin cabecera ni barra
    inferior. Una identidad registrada pero sin nombre abre `AppScreen.ACCOUNT`
    para completar ese dato. Un timeout o error 5xx no debe cerrar sesión.
-2. Inicio muestra un hero de aventura con cuatro imágenes en rotación automática,
+2. Inicio muestra un hero de aventura con cuatro imágenes JPG entregadas por el
+   usuario (`home_hero_truck`, `home_hero_peloton`, `home_hero_ridge` y
+   `home_hero_trail`) en rotación automática,
    historias y un feed social/comunitario de juntas activas. Marketplace es
    independiente y nunca se mezcla en Inicio. El acceso de mapa abre
    `AppScreen.ROUTES`.
@@ -201,8 +209,9 @@ Capa remota centralizada con `HttpURLConnection` y `org.json`.
    automaticamente las pestañas.
 4. El destino Perfil de la barra inferior abre `AppScreen.ACCOUNT`; la cabecera
    no duplica ese acceso.
-5. `AccountScreen` contiene identidad, rendimiento disponible, `Mi garaje`,
-   contenido propio y las tarjetas deportivas pausadas para una sesion activa.
+5. `AccountScreen` contiene identidad, rendimiento disponible, una vista previa
+   visible de bicicletas, posts y rutas/juntas propias, `Mi garaje` y las tarjetas
+   deportivas pausadas para una sesion activa.
    `UnauthenticatedAccessScreen` contiene el login sobre el fondo MTB
    `auth_mtb_background.png`; un acceso correcto vuelve automaticamente a Inicio
    y un error permanece en ese formulario.
@@ -283,8 +292,9 @@ Al cambiar cuenta, verificar:
 - La sincronizacion no es pantalla principal; vive en `AccountScreen`.
 - Plataformas: Strava, Garmin y Wahoo.
 - La funcion esta detenida intencionalmente hasta una futura etapa del producto.
-- Las tarjetas son informativas, no tienen botones y muestran una cinta diagonal
-  `PROXIMAMENTE` junto al estado `Vinculacion en pausa`.
+- Las tarjetas son informativas y no tienen botones. Solo Strava muestra la cinta
+  diagonal `PROXIMAMENTE`; Garmin y Wahoo conservan el estado `Vinculacion en
+  pausa` sin presentar una promesa de disponibilidad.
 - El bloque deportivo se muestra antes de `ProfileContentSection`/`Tu actividad`
   para que Strava, Garmin y Wahoo permanezcan juntas y no queden despues de
   listados propios extensos.
@@ -456,6 +466,9 @@ Estado actual:
   grises `Map data not yet available` en 19 y en sectores vecinos de 18 durante
   zoom anclado; no retirar este margen ni permitir sobrezoom.
 - En el primer ingreso solicita permisos de ubicacion Android.
+- El lienzo de MapLibre desactiva temporalmente el swipe del pager mientras se
+  toca/arrastra el mapa; los controles superpuestos lo reactivan para conservar
+  la navegacion horizontal entre destinos.
 - La lectura actual consulta en paralelo GPS, red y proveedor pasivo mediante
   `LocationManagerCompat.getCurrentLocation` con `CancellationSignal`, elige el
   punto fresco de menor `accuracy` y solo acepta un ultimo punto conocido con
@@ -773,7 +786,9 @@ Reglas:
   bicicleta/A verde anterior.
 - El splash de plataforma es negro y usa un icono transparente. En arranque
   frio, `LaunchBrandScreen` anima 40 puntos LED blancos desde las cuatro esquinas
-  durante 4.500 ms, revela el logo en el centro y entra a la app a los 5.000 ms.
+  durante 4.500 ms, revela el mismo logo compartido con el login, muestra
+  `Iniciando sesión…` debajo y entra a la app a los 5.000 ms. La app se compone
+  debajo del splash para que la validación de sesión empiece sin demora.
   No mostrar el logo completo antes de esa convergencia.
 - Con `fontScale >= 1.6`, la cabecera usa `RIDE • CONNECT`; la barra inferior
   mantiene nombres semanticos completos y no muestra labels de destinos
@@ -793,11 +808,24 @@ Reglas:
 - No mostrar controles con apariencia de pestaña si no existe una acción. Cuenta
   no incluye los antiguos rótulos estáticos Progreso/Entrenamientos/Actividades.
 - La marca APPBIKE se expone como un único encabezado semántico; las tarjetas
-  Strava/Garmin/Wahoo se exponen como un único anuncio por plataforma y
-  `Agregar bicicleta` conserva rol y etiqueta de botón.
-- En `MapScreen`, las capas Compose de buscador/ubicación y acción principal se
-  componen antes de `AndroidView` y usan `zIndex(1f)`. Conservar ese orden para
-  que buscador, ubicación y crear junta sigan disponibles por teclado.
+  Strava/Garmin/Wahoo se exponen como un único anuncio por plataforma, solo el
+  anuncio de Strava incluye `Próximamente`, y `Agregar bicicleta` conserva rol y
+  etiqueta de botón.
+- El splash, login, banner dentro de la app y notificaciones comparten el
+  emblema `appbike_brand_icon`; las notificaciones usan además una variante
+  monocroma transparente compatible con el icono pequeño de Android.
+- En `MapScreen`, las capas Compose de buscador/ubicación y acciones
+  `Trayecto`/`Junta` se componen antes de `AndroidView`, usan `zIndex(1f)` y
+  comparten la esquina superior con capas/búsqueda sobre fondos semitransparentes.
+  Las acciones usan un selector segmentado compacto, con dos botones del mismo
+  ancho, borde sutil y transparencia suficiente para conservar el mapa visible.
+  Conservar ese orden para que buscador, ubicación y creación sigan disponibles
+  por teclado.
+
+- `PremiumScreenBackground` usa `appbike_solar_halo_background` como textura
+  ambiental oscura de halo ámbar, con una capa de contraste para mantener la
+  lectura. No reemplazarla por fotografías ni colocarla por encima de contenido
+  interactivo.
 
 - Una tarjeta resumida solo expone accion de clic cuando recibe un callback. La
   copia mostrada dentro del detalle de bicicleta es estatica.

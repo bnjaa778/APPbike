@@ -1,6 +1,6 @@
 # Estado actual de APPbike
 
-Actualizado: 2026-08-23.
+Actualizado: 2026-08-28.
 
 ## Aplicación
 
@@ -31,10 +31,12 @@ Actualizado: 2026-08-23.
   `user.username.update`.
 - Cuenta muestra un acceso a ajustes si las notificaciones están desactivadas.
 - La sincronización deportiva está pausada por decisión de producto. Strava,
-  Garmin y Wahoo se muestran como tarjetas no interactivas con cinta diagonal
-  `PRÓXIMAMENTE`; Android no ejecuta acciones OAuth mientras siga detenida.
-- Perfil prioriza `Mi garaje`, rendimiento disponible y `Tu actividad`; el
-  bloque deportivo pausado aparece despues y mantiene juntas las tres plataformas.
+  Garmin y Wahoo se muestran como tarjetas no interactivas; solo Strava lleva la
+  cinta diagonal `PRÓXIMAMENTE`, mientras Garmin y Wahoo indican pausa sin
+  prometer disponibilidad. Android no ejecuta acciones OAuth mientras siga detenida.
+- Perfil muestra una vista previa de bicicletas, posts locales y rutas/juntas
+  propias antes de ofrecer el acceso completo a `Mi garaje`; el bloque deportivo
+  aparece después y mantiene juntas las tres plataformas.
 - Al autenticar correctamente se borran de inmediato el usuario y la contraseña
   escritos. El contenido de perfil se reinicia por `userId`, por lo que una
   respuesta tardía de otra cuenta no puede conservarse en pantalla.
@@ -73,8 +75,10 @@ Actualizado: 2026-08-23.
   sesion, un objetivo tactil de 48 dp y descripcion accesible. El clima mantiene
   intacto su espacio contiguo.
 - El splash de plataforma queda negro; después `LaunchBrandScreen` anima 40 LED
-  blancos que convergen desde las cuatro esquinas, revela el mismo logo y entra
-  a la interfaz a los 5.000 ms. El logo completo no se adelanta a la animación.
+  blancos que convergen desde las cuatro esquinas, revela el mismo logo
+  compartido con el acceso y muestra `Iniciando sesión…` debajo. La app se
+  compone debajo del splash para validar la sesión en paralelo y entra a la
+  interfaz a los 5.000 ms. El logo completo no se adelanta a la animación.
 - Tipografía, radios, espaciado, tarjetas y estados comparten tokens centrales
   en `ui/theme/` y `CommonComponents.kt`.
 - `ui/theme/Color.kt` es la fuente única de color; los recursos morado/teal de
@@ -85,8 +89,8 @@ Actualizado: 2026-08-23.
   un contraste de 9,16:1 sobre la superficie elevada.
 - Con fuente Android de 160 % o más, la cabecera usa una firma compacta y la
   barra inferior conserva nombres semánticos sin rotular destinos inactivos.
-- Las tarjetas deportivas cambian a reflow vertical a escala grande; las cintas
-  `PRÓXIMAMENTE` conservan tamaño visual y no invaden el texto. Los estados
+- Las tarjetas deportivas cambian a reflow vertical a escala grande; la cinta
+  única de Strava `PRÓXIMAMENTE` conserva tamaño visual y no invade el texto. Los estados
   vacíos priorizan su CTA y Chat permite desplazamiento a 200 %.
 - Cada fondo decorativo se recorta a los límites de su pantalla para no pintar
   sobre cabecera o navegación raíz.
@@ -95,6 +99,9 @@ Actualizado: 2026-08-23.
 - Un `HorizontalPager` sincronizado con la barra cambia Inicio/Marketplace/Mapa/
   Chat/Perfil. Las cinco paginas quedan montadas, sus estados se conservan y las
   cargas de red se difieren hasta la primera activacion.
+- El destino actual se conserva durante recreaciones, una navegación rápida no
+  es reemplazada por el asentamiento de una página anterior y el botón Atrás
+  del sistema cierra `Mi garaje` hacia Perfil.
 - Cabecera, contenido y navegación son hermanos directos en la raíz. Solo el
   contenido central usa recorte, evitando que MapLibre o los fondos Compose
   oculten barras persistentes durante la navegación horizontal.
@@ -104,6 +111,14 @@ Actualizado: 2026-08-23.
 - En Mapas, el orden de teclado conserva buscador, búsqueda, ubicación, creación,
   mapa y navegación. Los objetivos interactivos comprobados mantienen al menos
   48 dp en su eje menor.
+- El lienzo de MapLibre reserva el gesto horizontal para desplazar el mapa; el
+  pager se reactiva cuando el gesto comienza en búsqueda, capas o Trayecto/Junta.
+- Inicio rota las cuatro fotografías entregadas por el usuario con sus dimensiones
+  JPG originales; los fondos decorativos agregan un brillo cálido naranja de baja
+  intensidad inspirado en la referencia visual.
+- Las notificaciones de Chat usan el emblema APPBIKE como icono grande y una
+  variante monocroma transparente de la marca como icono pequeño; el banner dentro
+  de la app usa el mismo recurso compartido del login y splash.
 
 ### Mapas y juntas
 
@@ -139,6 +154,11 @@ Actualizado: 2026-08-23.
 - Historial de hasta ocho ubicaciones.
 - Ubicación de Juntas independiente de Marketplace.
 - Juntas activas con coordenadas; contenido propio se administra en el perfil.
+- `Trayecto`/`Junta` se muestran como selector segmentado compacto en la esquina
+  superior, con botones equilibrados, borde sutil y transparencia sobre el mapa.
+- `PremiumScreenBackground` incorpora `appbike_solar_halo_background`, una
+  textura raster abstracta de halo ámbar y atmósfera verde-grafito, con contraste
+  controlado para no competir con el contenido.
 - Recargas y detalles descartan respuestas antiguas; la creación bloquea doble
   envío y distingue la creación exitosa de un fallo posterior al subir la foto.
 - Una resolución remota de ubicación solo se aplica si sigue siendo la selección

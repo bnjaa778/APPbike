@@ -82,10 +82,10 @@ private val HOME_FALLBACK_CENTER = GeoPoint(
 )
 
 private val HOME_HERO_IMAGES = intArrayOf(
-    R.drawable.home_hero_forest,
+    R.drawable.home_hero_truck,
+    R.drawable.home_hero_peloton,
     R.drawable.home_hero_ridge,
-    R.drawable.home_hero_gravel,
-    R.drawable.home_hero_group
+    R.drawable.home_hero_trail
 )
 
 private data class HomeSocialEntry(
@@ -628,7 +628,7 @@ private fun HomeSocialCard(
                         modifier = Modifier.matchParentSize(),
                         fallback = {
                             Image(
-                                painter = painterResource(R.drawable.home_hero_forest),
+                                painter = painterResource(R.drawable.home_hero_trail),
                                 contentDescription = null,
                                 modifier = Modifier.matchParentSize(),
                                 contentScale = ContentScale.Crop
@@ -752,7 +752,7 @@ private fun HomeLocalMedia(
         val loaded = bitmap
         if (loaded == null) {
             Image(
-                painter = painterResource(R.drawable.home_hero_forest),
+                painter = painterResource(R.drawable.home_hero_trail),
                 contentDescription = "Fotografía de la publicación personal",
                 modifier = modifier,
                 contentScale = ContentScale.Crop

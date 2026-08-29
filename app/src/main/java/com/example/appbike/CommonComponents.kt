@@ -6,6 +6,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +30,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Inventory2
@@ -85,6 +88,20 @@ enum class PremiumGlowStyle {
 }
 
 @Composable
+internal fun AppBrandLogo(
+    modifier: Modifier = Modifier,
+    contentDescription: String? = "APPBIKE",
+    contentScale: ContentScale = ContentScale.Fit
+) {
+    Image(
+        painter = painterResource(R.drawable.appbike_brand_icon),
+        contentDescription = contentDescription,
+        modifier = modifier,
+        contentScale = contentScale
+    )
+}
+
+@Composable
 fun PremiumScreenBackground(
     style: PremiumGlowStyle,
     modifier: Modifier = Modifier,
@@ -103,7 +120,23 @@ fun PremiumScreenBackground(
         modifier = modifier
             .fillMaxSize()
             .background(base)
-            .drawBehind {
+    ) {
+        Image(
+            painter = painterResource(R.drawable.appbike_solar_halo_background),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
+            alpha = when (style) {
+                PremiumGlowStyle.Chat -> 0.60f
+                PremiumGlowStyle.Map -> 0.18f
+                else -> 0.48f
+            }
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(base.copy(alpha = 0.78f))
+                .drawBehind {
                 val max = size.maxDimension
                 val centerY = when (style) {
                     PremiumGlowStyle.Home -> 0.12f
@@ -114,6 +147,17 @@ fun PremiumScreenBackground(
                     PremiumGlowStyle.Map -> 0.18f
                 }
                 clipRect {
+                    // Warm, low-contrast sunlight keeps the dark surfaces feeling
+                    // outdoorsy without competing with readable content.
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            0.0f to AppAccentOrange.copy(alpha = 0.22f),
+                            0.30f to AppAccentOrange.copy(alpha = 0.10f),
+                            1.0f to Color.Transparent
+                        ),
+                        radius = max * 0.46f,
+                        center = Offset(size.width * 0.02f, size.height * centerY)
+                    )
                     drawCircle(
                         brush = Brush.radialGradient(
                             0.0f to AppPrimaryBright.copy(alpha = 0.24f),
@@ -134,7 +178,7 @@ fun PremiumScreenBackground(
                     )
                 }
             }
-    ) {
+        )
         content()
     }
 }

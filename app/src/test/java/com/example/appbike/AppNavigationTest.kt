@@ -1,6 +1,9 @@
 package com.example.appbike
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppNavigationTest {
@@ -34,5 +37,22 @@ class AppNavigationTest {
         assertEquals(AppScreen.HOME, mainDestinationAt(-1))
         assertEquals(AppScreen.ROUTES, mainDestinationAt(2))
         assertEquals(AppScreen.ACCOUNT, mainDestinationAt(99))
+    }
+
+    @Test
+    fun systemBackLeavesSecondaryGarageWithoutChangingMainDestinations() {
+        assertEquals(
+            AppScreen.ACCOUNT,
+            secondaryDestinationAfterBack(AppScreen.BIKES)
+        )
+        assertNull(secondaryDestinationAfterBack(AppScreen.HOME))
+        assertNull(secondaryDestinationAfterBack(AppScreen.ACCOUNT))
+    }
+
+    @Test
+    fun mapKeepsHorizontalPanWhileOtherDestinationsKeepPagerSwipe() {
+        assertFalse(mainPagerSwipeEnabled(AppScreen.ROUTES, false))
+        assertTrue(mainPagerSwipeEnabled(AppScreen.ROUTES, true))
+        assertTrue(mainPagerSwipeEnabled(AppScreen.HOME, false))
     }
 }

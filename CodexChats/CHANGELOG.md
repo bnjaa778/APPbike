@@ -2487,3 +2487,137 @@ Pendientes:
 Siguiente paso:
 
 - Revisar la nueva velocidad en el teléfono desbloqueado.
+
+## 2026-08-28 - Navegación estable y estado de inicio de sesión
+
+Objetivo:
+
+- Corregir saltos al cambiar rápidamente entre destinos y unificar el logo del
+  arranque, la validación de sesión y el acceso al mismo recurso visual.
+
+Cambios:
+
+- `MainActivity` conserva el destino actual durante recreaciones, sincroniza el
+  pager contra `settledPage` para no perder toques rápidos y permite volver de
+  `Mi garaje` a Perfil con el botón Atrás del sistema.
+- Se retiraron la transformación gráfica por página y la recreación forzada de
+  la cabecera al navegar; esto reduce trabajo durante el gesto y evita capas
+  que podían interferir con MapLibre.
+- La app se compone debajo del splash para iniciar la validación de sesión en
+  paralelo. `LaunchBrandScreen` muestra el mismo logo compartido y el texto
+  `Iniciando sesión…` debajo antes de derivar al acceso.
+- Se añadió `AppBrandLogo` como punto único de uso del emblema y pruebas para
+  el estado visual de inicio y el regreso del flujo secundario.
+
+Pruebas:
+
+- `:app:testDebugUnitTest`: correcto.
+- `:app:assembleDebug`, `:app:assembleDebugAndroidTest` y `:app:lintDebug`:
+  correctos.
+- `:app:compileDebugKotlin` y `:app:compileDebugAndroidTestKotlin`: correctos.
+- Lint conserva únicamente avisos informativos preexistentes de versiones,
+  forma del launcher y dos sugerencias KTX.
+- `adb devices`: sin dispositivo conectado; no fue posible ejecutar pruebas
+  instrumentadas ni validación física de navegación.
+
+Pendientes:
+
+- Validar el splash y los gestos en un AVD o equipo físico desbloqueado.
+
+Siguiente paso:
+
+- Instalar el APK final en un dispositivo disponible y revisar cambio rápido
+  entre las cinco pestañas, entrada/salida de `Mi garaje` y derivación al login.
+
+## 2026-08-28 - Pulido de navegación, inicio y perfil rider
+
+Objetivo:
+
+- Resolver la interferencia entre el gesto horizontal del pager y el paneo del
+  mapa, reemplazar el hero por las cuatro fotos entregadas y mejorar el perfil,
+  notificaciones, login y presentación deportiva con una estética outdoor cálida.
+
+Cambios:
+
+- Inicio rota `home_hero_truck.jpg`, `home_hero_peloton.jpg`,
+  `home_hero_ridge.jpg` y `home_hero_trail.jpg` conservando sus dimensiones JPG
+  originales. Los cuatro PNG anteriores fueron retirados del paquete de recursos
+  y conservados como respaldo fuera del proyecto.
+- Se eliminó de `UnauthenticatedAccessScreen` el texto de persistencia local
+  solicitado. El splash, el login y el banner dentro de la app siguen usando
+  `AppBrandLogo` y `Iniciando sesión…` antes de derivar al acceso.
+- El mapa reserva el paneo horizontal para MapLibre y solo habilita el swipe del
+  pager cuando el gesto empieza en los controles Compose. Trayecto y Junta se
+  trasladaron junto a búsqueda/capas, con superficie semitransparente.
+- Las notificaciones de Chat usan el emblema APPBIKE como icono grande y una
+  variante monocroma transparente derivada del logo como icono pequeño; el icono
+  de burbuja anterior ya no se utiliza.
+- Perfil carga bicicletas por la cuenta activa antes de mostrar el contenido,
+  presenta una vista previa de bicis, posts locales y rutas/juntas propias, y
+  conserva el acceso completo a Mi garaje y Mapa.
+- La vinculación deportiva recibió una tarjeta de presentación cálida; solo
+  Strava lleva `PRÓXIMAMENTE`, mientras Garmin y Wahoo quedan informativos y en
+  pausa sin iniciar OAuth.
+- `PremiumScreenBackground` añade un brillo naranja suave de inspiración solar,
+  sin invadir cabecera ni navegación.
+- Se actualizaron `AGENTS.md`, `docs/MAP_MARKETPLACE_CHAT.md` y
+  `CodexChats/CURRENT_STATE.md` con los contratos nuevos.
+
+Pruebas:
+
+- `:app:compileDebugKotlin`: correcto.
+- `:app:testDebugUnitTest`: correcto.
+- `:app:assembleDebug`: correcto.
+- `:app:assembleDebugAndroidTest`: correcto.
+- `:app:lintDebug`: correcto; conserva únicamente avisos informativos de
+  versiones/dependencias, forma del launcher y dos sugerencias KTX preexistentes.
+- Se añadió cobertura unitaria para la regla de swipe del mapa y se conservan
+  las pruebas existentes del logo, navegación secundaria y semántica de Strava.
+- `:app:connectedDebugAndroidTest`: 41 pruebas ejecutadas en `APPbike_API_35`
+  (Android 15), 0 fallos y 2 omitidas por sus precondiciones.
+
+Pendientes:
+
+- Falta validar el aspecto final en un teléfono físico; el AVD ya ejecutó las
+  pruebas instrumentadas disponibles correctamente.
+
+Siguiente paso:
+
+- Instalar el APK debug en un AVD o teléfono desbloqueado y recorrer Inicio,
+  Mapa, Perfil y Chat con los gestos y estados de sesión reales.
+
+## 2026-08-29 - Pulido visual de mapa y fondos
+
+Objetivo:
+
+- Mejorar el encuadre, la transparencia y la jerarquía de `Trayecto`/`Junta`, y
+  llevar el fondo oscuro cálido hacia un lenguaje propio de APPbike inspirado
+  en halos solares.
+
+Cambios:
+
+- `MapPrimaryActions` ahora usa un selector segmentado compacto, dos botones de
+  igual peso, superficies semitransparentes, borde activo sutil y elevación
+  ligera; se conserva la posición superior junto a búsqueda y capas.
+- Se generó e integró `appbike_solar_halo_background.png`, una textura abstracta
+  de alta calidad con contorno ámbar, atmósfera verde y espacio negativo para
+  mantener legible la interfaz.
+- `PremiumScreenBackground` compone la textura con una capa de contraste y la
+  mantiene detrás del contenido interactivo.
+
+Pruebas:
+
+- `:app:testDebugUnitTest`, `:app:assembleDebug` y `:app:lintDebug`: correctos.
+- Instalación y apertura verificadas en teléfono físico Samsung SM-A235M.
+- Inspección visual real en Inicio y Mapa; el selector se muestra sobre el mapa
+  con transparencia y el fondo cálido se aprecia en el contenido oscuro.
+
+Pendientes:
+
+- Validar el nuevo encuadre en más tamaños de pantalla y con estilos de mapa
+  cargados en red estable.
+
+Siguiente paso:
+
+- Recorrer en el teléfono el flujo completo de elegir Trayecto y crear una
+  Junta para comprobar el estado activo y sus diálogos.

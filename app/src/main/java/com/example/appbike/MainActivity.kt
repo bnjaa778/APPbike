@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -23,7 +24,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Close
@@ -67,19 +68,19 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -107,7 +108,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.withContext
 import kotlin.math.PI
-import kotlin.math.absoluteValue
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -140,15 +140,22 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // Keep the app mounted below the brand screen so session validation and
+                // the first screen can load while the visual intro is still visible.
+                AppBikeApp(
+                    oauthCallback = sportsOauthCallback.value,
+                    onOauthCallbackConsumed = { sportsOauthCallback.value = null },
+                    notificationTarget = notificationChatTarget.value,
+                    onNotificationTargetConsumed = { notificationChatTarget.value = null }
+                )
                 if (showLaunchBrand) {
-                    LaunchBrandScreen()
-                } else {
-                    AppBikeApp(
-                        oauthCallback = sportsOauthCallback.value,
-                        onOauthCallbackConsumed = { sportsOauthCallback.value = null },
-                        notificationTarget = notificationChatTarget.value,
-                        onNotificationTargetConsumed = { notificationChatTarget.value = null }
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .zIndex(2f)
+                    ) {
+                        LaunchBrandScreen()
+                    }
                 }
             }
         }
@@ -224,6 +231,7 @@ class MainActivity : ComponentActivity() {
 
 private const val LAUNCH_BRAND_DURATION_MS = 5_000L
 private const val LAUNCH_BRAND_ANIMATION_MS = 4_500
+internal const val LAUNCH_BRAND_STATUS_TEXT = "Iniciando sesión…"
 private val BRAND_LOGO_SIZE = 220.dp
 private const val WEATHER_REFRESH_INTERVAL_MS = 15 * 60 * 1_000L
 private const val WEATHER_RETRY_INTERVAL_MS = 60_000L
@@ -234,6 +242,13 @@ private val MAIN_SWIPE_DESTINATIONS = listOf(
     AppScreen.ROUTES,
     AppScreen.CHAT,
     AppScreen.ACCOUNT
+)
+
+private val appScreenSaver = Saver<AppScreen, String>(
+    save = { it.name },
+    restore = { saved ->
+        runCatching { AppScreen.valueOf(saved) }.getOrDefault(AppScreen.ACCOUNT)
+    }
 )
 
 internal fun initialDestinationFor(session: AccountSession?): AppScreen =
@@ -249,14 +264,24 @@ internal fun mainDestinationFor(screen: AppScreen): AppScreen = when (screen) {
     else -> screen
 }
 
+internal fun secondaryDestinationAfterBack(screen: AppScreen): AppScreen? = when (screen) {
+    AppScreen.BIKES -> AppScreen.ACCOUNT
+    else -> null
+}
+
 internal fun mainDestinationIndex(screen: AppScreen): Int =
     MAIN_SWIPE_DESTINATIONS.indexOf(mainDestinationFor(screen))
 
 internal fun mainDestinationAt(page: Int): AppScreen =
     MAIN_SWIPE_DESTINATIONS[page.coerceIn(MAIN_SWIPE_DESTINATIONS.indices)]
 
+internal fun mainPagerSwipeEnabled(
+    screen: AppScreen,
+    mapControlsGestureEnabled: Boolean
+): Boolean = screen != AppScreen.ROUTES || mapControlsGestureEnabled
+
 @Composable
-private fun LaunchBrandScreen() {
+internal fun LaunchBrandScreen() {
     val progress = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
         progress.animateTo(
@@ -347,16 +372,24 @@ private fun LaunchBrandScreen() {
                     }
                 }
             }
-            Image(
-                painter = painterResource(R.drawable.appbike_brand_icon),
-                contentDescription = "APPBIKE",
-                modifier = Modifier
-                    .size(BRAND_LOGO_SIZE)
-                    .graphicsLayer {
-                        alpha = revealProgress
-                    },
-                contentScale = ContentScale.Fit
-            )
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                AppBrandLogo(
+                    modifier = Modifier
+                        .size(BRAND_LOGO_SIZE)
+                        .graphicsLayer { alpha = revealProgress }
+                )
+                Text(
+                    text = LAUNCH_BRAND_STATUS_TEXT,
+                    color = AppTextSecondary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.graphicsLayer {
+                        alpha = 0.72f + (revealProgress * 0.28f)
+                    }
+                )
+            }
         }
     }
 }
@@ -397,7 +430,9 @@ fun AppBikeApp(
         mutableStateOf(initialSession)
     }
     var profilePhotoUri by remember { mutableStateOf("") }
-    var currentScreen by remember { mutableStateOf(initialDestinationFor(initialSession)) }
+    var currentScreen by rememberSaveable(stateSaver = appScreenSaver) {
+        mutableStateOf(initialDestinationFor(initialSession))
+    }
     var isValidatingInitialSession by remember { mutableStateOf(initialSession != null) }
     var initialLoginError by remember { mutableStateOf<String?>(null) }
 
@@ -418,6 +453,7 @@ fun AppBikeApp(
     var weatherState by remember {
         mutableStateOf<WeatherHeaderState>(WeatherHeaderState.WaitingForLocation)
     }
+    var mapPagerSwipeEnabled by remember { mutableStateOf(false) }
     val platforms = remember {
         mutableStateListOf(
             SyncPlatform("strava", "Strava", "Actividades, rutas y entrenamientos.", false),
@@ -617,6 +653,10 @@ fun AppBikeApp(
         return
     }
 
+    BackHandler(enabled = secondaryDestinationAfterBack(currentScreen) != null) {
+        currentScreen = secondaryDestinationAfterBack(currentScreen) ?: currentScreen
+    }
+
     val pagerState = rememberPagerState(
         initialPage = mainDestinationIndex(currentScreen).coerceAtLeast(0),
         pageCount = { MAIN_SWIPE_DESTINATIONS.size }
@@ -637,13 +677,16 @@ fun AppBikeApp(
     }
 
     LaunchedEffect(currentScreen) {
+        if (currentScreen != AppScreen.ROUTES) {
+            mapPagerSwipeEnabled = false
+        }
         val canonicalScreen = mainDestinationFor(currentScreen)
         if (currentScreen != AppScreen.BIKES && canonicalScreen != currentScreen) {
             currentScreen = canonicalScreen
             return@LaunchedEffect
         }
         val targetPage = mainDestinationIndex(currentScreen)
-        if (targetPage >= 0 && pagerState.currentPage != targetPage) {
+        if (targetPage >= 0 && pagerState.settledPage != targetPage) {
             pagerState.animateScrollToPage(targetPage)
         }
     }
@@ -702,7 +745,10 @@ fun AppBikeApp(
                 onOpenAccount = { currentScreen = AppScreen.ACCOUNT },
                 initialMeetupId = meetupToOpenId,
                 onInitialMeetupConsumed = { meetupToOpenId = null },
-                isActive = isActive
+                isActive = isActive,
+                onPagerSwipeEnabledChange = { enabled ->
+                    if (currentScreen == AppScreen.ROUTES) mapPagerSwipeEnabled = enabled
+                }
             )
 
             AppScreen.CHAT -> ChatScreen(
@@ -722,7 +768,15 @@ fun AppBikeApp(
                 platforms = platforms,
                 isActive = isActive,
                 bikeCount = bikes.size,
+                bikes = bikes,
+                onBikesLoaded = { loadedForUserId, loadedBikes ->
+                    if (accountSession?.userId == loadedForUserId) {
+                        bikes.clear()
+                        bikes.addAll(loadedBikes)
+                    }
+                },
                 onOpenBikes = { currentScreen = AppScreen.BIKES },
+                onOpenRoutes = { currentScreen = AppScreen.ROUTES },
                 initialErrorMessage = initialLoginError,
                 oauthCallback = oauthCallback,
                 onOauthCallbackConsumed = onOauthCallbackConsumed,
@@ -744,19 +798,14 @@ fun AppBikeApp(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .graphicsLayer {
-                        compositingStrategy = CompositingStrategy.Offscreen
-                    }
                     .zIndex(1f)
             ) {
-                androidx.compose.runtime.key(currentScreen) {
-                    AppTopBar(
-                        session = accountSession,
-                        accountSelected = mainDestinationFor(currentScreen) == AppScreen.ACCOUNT,
-                        weatherState = weatherState,
-                        onAccountClick = { currentScreen = AppScreen.ACCOUNT }
-                    )
-                }
+                AppTopBar(
+                    session = accountSession,
+                    accountSelected = mainDestinationFor(currentScreen) == AppScreen.ACCOUNT,
+                    weatherState = weatherState,
+                    onAccountClick = { currentScreen = AppScreen.ACCOUNT }
+                )
             }
 
             Box(
@@ -769,24 +818,14 @@ fun AppBikeApp(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize(),
                     beyondViewportPageCount = MAIN_SWIPE_DESTINATIONS.size,
-                    userScrollEnabled = currentScreen in MAIN_SWIPE_DESTINATIONS
+                    userScrollEnabled = currentScreen in MAIN_SWIPE_DESTINATIONS &&
+                        mainPagerSwipeEnabled(currentScreen, mapPagerSwipeEnabled)
                 ) { page ->
                     val destination = mainDestinationAt(page)
                     val isDestinationActive = currentScreen == destination &&
                         pagerState.settledPage == page
                     Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer {
-                                val pageOffset = (
-                                    (pagerState.currentPage - page) +
-                                        pagerState.currentPageOffsetFraction
-                                    ).absoluteValue.coerceIn(0f, 1f)
-                                alpha = 1f - (pageOffset * 0.12f)
-                                val pageScale = 1f - (pageOffset * 0.018f)
-                                scaleX = pageScale
-                                scaleY = pageScale
-                            }
+                        modifier = Modifier.fillMaxSize()
                     ) {
                         mainDestinationContent(destination, isDestinationActive)
                     }
@@ -854,11 +893,8 @@ private fun SessionValidationScreen() {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Image(
-                painter = painterResource(R.drawable.appbike_brand_icon),
-                contentDescription = "APPBIKE",
-                modifier = Modifier.size(BRAND_LOGO_SIZE),
-                contentScale = ContentScale.Fit
+            AppBrandLogo(
+                modifier = Modifier.size(BRAND_LOGO_SIZE)
             )
             CircularProgressIndicator(
                 modifier = Modifier.size(30.dp),
@@ -866,7 +902,7 @@ private fun SessionValidationScreen() {
                 strokeWidth = 2.dp
             )
             Text(
-                "Verificando sesión…",
+                LAUNCH_BRAND_STATUS_TEXT,
                 modifier = Modifier.padding(top = 14.dp),
                 color = AppTextSecondary,
                 style = MaterialTheme.typography.bodyMedium
@@ -918,10 +954,12 @@ private fun InAppMessageBanner(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                Icons.Outlined.ChatBubbleOutline,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary
+            AppBrandLogo(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .padding(3.dp),
+                contentDescription = null
             )
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -1038,8 +1076,7 @@ internal fun AppTopBar(
                         color = AppPrimarySoft,
                         border = BorderStroke(1.dp, AppBorderActive.copy(alpha = 0.60f))
                     ) {
-                        Image(
-                            painter = painterResource(R.drawable.appbike_brand_icon),
+                        AppBrandLogo(
                             contentDescription = null,
                             modifier = Modifier
                                 .fillMaxSize()
@@ -1047,7 +1084,6 @@ internal fun AppTopBar(
                                     scaleX = 1.18f
                                     scaleY = 1.18f
                                 },
-                            contentScale = ContentScale.Fit
                         )
                     }
                     Spacer(Modifier.width(10.dp))

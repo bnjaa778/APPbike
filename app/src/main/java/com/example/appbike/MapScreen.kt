@@ -78,6 +78,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -212,6 +213,24 @@ private const val ROUTE_SOURCE_ID = "appbike-route-source"
 private const val ROUTE_LAYER_ID = "appbike-route-layer"
 private val DEFAULT_MAP_CENTER = GeoPoint(-33.4489, -70.6693, "Santiago")
 
+private fun Modifier.mapPagerSwipeRegion(
+    pagerSwipeEnabled: Boolean,
+    onPagerSwipeEnabledChange: (Boolean) -> Unit
+): Modifier = pointerInput(pagerSwipeEnabled) {
+    awaitPointerEventScope {
+        var lastEnabled: Boolean? = null
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            val isPressed = event.changes.any { it.pressed }
+            val enabledForGesture = if (isPressed) pagerSwipeEnabled else true
+            if (lastEnabled != enabledForGesture) {
+                lastEnabled = enabledForGesture
+                onPagerSwipeEnabledChange(enabledForGesture)
+            }
+        }
+    }
+}
+
 @Composable
 fun RoutesScreen(
     account: AccountSession?,
@@ -219,7 +238,8 @@ fun RoutesScreen(
     onOpenAccount: () -> Unit = {},
     initialMeetupId: String? = null,
     onInitialMeetupConsumed: () -> Unit = {},
-    isActive: Boolean = true
+    isActive: Boolean = true,
+    onPagerSwipeEnabledChange: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -564,8 +584,12 @@ fun RoutesScreen(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(horizontal = 12.dp, vertical = 8.dp)
+                .mapPagerSwipeRegion(
+                    pagerSwipeEnabled = true,
+                    onPagerSwipeEnabledChange = onPagerSwipeEnabledChange
+                )
                 .zIndex(1f),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 MapControlButton(
@@ -609,6 +633,34 @@ fun RoutesScreen(
                         }
                     }
                 }
+            }
+
+            if (
+                creationStep == MeetupCreationStep.CLOSED &&
+                routePreview == null &&
+                !routeLoading
+            ) {
+                MapPrimaryActions(
+                    modifier = Modifier,
+                    onCreateRoute = {
+                        if (userLocation == null) {
+                            locationSetupMessage =
+                                "Confirma tu ubicación antes de elegir el destino del trayecto."
+                            locationSetupStep = LocationSetupStep.MANUAL
+                        } else {
+                            searchControlsExpanded = false
+                            routeNotice = null
+                            routeDestinationPicker = true
+                        }
+                    },
+                    onCreateMeetup = {
+                        if (account == null) onOpenAccount()
+                        else {
+                            creationError = null
+                            creationStep = MeetupCreationStep.SELECT_LOCATION
+                        }
+                    }
+                )
             }
 
             if (searchControlsExpanded) {
@@ -703,36 +755,16 @@ fun RoutesScreen(
                     ) { Text("Confirmar") }
                 }
             }
-        } else if (routePreview == null && !routeLoading) {
-            MapPrimaryActions(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 18.dp)
-                    .zIndex(1f),
-                onCreateRoute = {
-                    if (userLocation == null) {
-                        locationSetupMessage =
-                            "Confirma tu ubicación antes de elegir el destino del trayecto."
-                        locationSetupStep = LocationSetupStep.MANUAL
-                    } else {
-                        searchControlsExpanded = false
-                        routeNotice = null
-                        routeDestinationPicker = true
-                    }
-                },
-                onCreateMeetup = {
-                    if (account == null) onOpenAccount()
-                    else {
-                        creationError = null
-                        creationStep = MeetupCreationStep.SELECT_LOCATION
-                    }
-                }
-            )
         }
 
         if (mapActivated) {
             OpenStreetMap(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .mapPagerSwipeRegion(
+                        pagerSwipeEnabled = false,
+                        onPagerSwipeEnabledChange = onPagerSwipeEnabledChange
+                    ),
                 center = center,
                 userLocation = displayedLocation,
                 meetups = meetups.toList(),
@@ -1321,23 +1353,31 @@ internal fun MapPrimaryActions(
 ) {
     Surface(
         modifier = modifier
-            .padding(horizontal = AppDimens.Space4),
-        shape = RoundedCornerShape(AppDimens.RadiusPill),
-        color = AppBackgroundElevated.copy(alpha = 0.78f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, AppBorderSubtle),
-        shadowElevation = 4.dp
+            .padding(horizontal = AppDimens.Space2)
+            .widthIn(min = 224.dp, max = 248.dp),
+        shape = RoundedCornerShape(24.dp),
+        color = AppBackgroundElevated.copy(alpha = 0.70f),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            AppBorderSubtle.copy(alpha = 0.82f)
+        ),
+        shadowElevation = 7.dp
     ) {
         Row(
-            modifier = Modifier.padding(4.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(4.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             MapPrimaryAction(
+                modifier = Modifier.weight(1f),
                 label = "Trayecto",
                 icon = Icons.AutoMirrored.Outlined.DirectionsBike,
                 selected = true,
                 onClick = onCreateRoute
             )
             MapPrimaryAction(
+                modifier = Modifier.weight(1f),
                 label = "Junta",
                 icon = Icons.Outlined.Add,
                 selected = false,
@@ -1349,6 +1389,7 @@ internal fun MapPrimaryActions(
 
 @Composable
 private fun MapPrimaryAction(
+    modifier: Modifier = Modifier,
     label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     selected: Boolean,
@@ -1356,18 +1397,27 @@ private fun MapPrimaryAction(
 ) {
     Surface(
         onClick = onClick,
-        modifier = Modifier.heightIn(min = AppSizes.TouchTarget),
+        modifier = modifier.height(48.dp),
         shape = RoundedCornerShape(AppDimens.RadiusPill),
-        color = if (selected) AppPrimary.copy(alpha = 0.86f) else Color.Transparent,
+        color = if (selected) {
+            AppPrimary.copy(alpha = 0.88f)
+        } else {
+            AppSurfaceElevated.copy(alpha = 0.34f)
+        },
         contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else AppTextPrimary,
         border = if (selected) {
-            null
+            androidx.compose.foundation.BorderStroke(
+                1.dp,
+                AppPrimaryBright.copy(alpha = 0.52f)
+            )
         } else {
-            androidx.compose.foundation.BorderStroke(1.dp, AppBorderSubtle)
+            androidx.compose.foundation.BorderStroke(1.dp, AppBorderSubtle.copy(alpha = 0.90f))
         }
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(7.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {

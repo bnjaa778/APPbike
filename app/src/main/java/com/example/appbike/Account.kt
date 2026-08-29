@@ -56,6 +56,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -79,6 +80,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import com.example.appbike.ui.theme.AppBackground
+import com.example.appbike.ui.theme.AppAccentBlue
+import com.example.appbike.ui.theme.AppAccentOrange
 import com.example.appbike.ui.theme.AppBorderSubtle
 import com.example.appbike.ui.theme.AppErrorSoft
 import com.example.appbike.ui.theme.AppPrimary
@@ -213,11 +216,9 @@ internal fun UnauthenticatedAccessScreen(
                     color = Color.Black.copy(alpha = 0.72f),
                     border = BorderStroke(1.dp, AppPrimaryBright.copy(alpha = 0.60f))
                 ) {
-                    Image(
-                        painter = painterResource(R.drawable.appbike_brand_icon),
+                    AppBrandLogo(
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit
                     )
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
@@ -342,12 +343,6 @@ internal fun UnauthenticatedAccessScreen(
                 }
             }
 
-            Text(
-                "Tu sesión solo se conserva en este dispositivo cuando el acceso es válido.",
-                modifier = Modifier.fillMaxWidth(),
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.68f)
-            )
         }
     }
 
@@ -377,7 +372,10 @@ fun AccountScreen(
     platforms: MutableList<SyncPlatform>,
     isActive: Boolean = true,
     bikeCount: Int = 0,
+    bikes: List<Bike> = emptyList(),
+    onBikesLoaded: (String, List<Bike>) -> Unit = { _, _ -> },
     onOpenBikes: () -> Unit = {},
+    onOpenRoutes: () -> Unit = {},
     initialErrorMessage: String? = null,
     oauthCallback: SportsOAuthCallback? = null,
     onOauthCallbackConsumed: () -> Unit = {},
@@ -398,7 +396,10 @@ fun AccountScreen(
     var profilePhotoUri by remember(session?.userId) { mutableStateOf("") }
     var profileBioDraft by remember(session?.userId) { mutableStateOf("") }
     var profileEditing by remember(session?.userId) { mutableStateOf(false) }
-    var socialPostCount by remember(session?.userId) { mutableStateOf(0) }
+    var socialPostCount by remember(session?.userId) { mutableIntStateOf(0) }
+    var routeCount by remember(session?.userId) { mutableIntStateOf(0) }
+    var profileBikesLoading by remember(session?.userId) { mutableStateOf(false) }
+    var profileBikesError by remember(session?.userId) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val profilePhotoPicker = rememberLauncherForActivityResult(
@@ -451,6 +452,26 @@ fun AccountScreen(
             profilePhotoUri = LocalDataStore.loadProfilePhotoUri(context, activeUserId)
         }
         profileEditing = false
+        routeCount = 0
+    }
+
+    LaunchedEffect(session?.userId, isActive) {
+        val activeSession = session ?: return@LaunchedEffect
+        if (!isActive || bikes.isNotEmpty()) return@LaunchedEffect
+        profileBikesLoading = true
+        profileBikesError = null
+        runSuspendCatching {
+            withContext(Dispatchers.IO) {
+                RemoteConnections.loadUserBikes(activeSession.userId)
+            }
+        }.onSuccess { loadedBikes ->
+            if (session.userId == activeSession.userId) {
+                onBikesLoaded(activeSession.userId, loadedBikes)
+            }
+        }.onFailure { error ->
+            profileBikesError = RemoteConnections.userFriendlyError(error)
+        }
+        profileBikesLoading = false
     }
 
     LaunchedEffect(oauthCallback) {
@@ -476,6 +497,7 @@ fun AccountScreen(
                     photoUri = profilePhotoUri,
                     bikeCount = bikeCount,
                     socialPostCount = socialPostCount,
+                    routeCount = routeCount,
                     isEditing = profileEditing,
                     bioDraft = profileBioDraft,
                     onEditBio = {
@@ -595,34 +617,40 @@ fun AccountScreen(
                 horizontalArrangement = Arrangement.spacedBy(AppDimens.Space3),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Surface(shape = CircleShape, color = AppPrimarySoft) {
+                Surface(
+                    shape = CircleShape,
+                    color = AppAccentOrange.copy(alpha = 0.16f)
+                ) {
                     Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Outlined.Sync,
                             contentDescription = null,
-                            tint = AppPrimaryBright
+                            tint = AppAccentOrange
                         )
                     }
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Sincronización deportiva",
+                        text = "Conecta tu mundo rider",
                         style = MaterialTheme.typography.titleLarge,
                         color = AppTextPrimary
                     )
                     Text(
-                        text = "Tus relojes y plataformas se unirán a APPBIKE en una futura actualización.",
+                        text = "Centraliza tus salidas, kilómetros y entrenamientos cuando la integración esté lista.",
                         color = AppTextSecondary,
                         style = MaterialTheme.typography.bodyMedium
                     )
                 }
             }
             Spacer(Modifier.height(AppDimens.Space3))
-            Surface(shape = RoundedCornerShape(AppDimens.RadiusPill), color = AppPrimarySoft) {
+            Surface(
+                shape = RoundedCornerShape(AppDimens.RadiusPill),
+                color = AppAccentOrange.copy(alpha = 0.16f)
+            ) {
                 Text(
-                    "EN DESARROLLO",
+                    "STRAVA · PRÓXIMAMENTE",
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    color = AppPrimaryBright,
+                    color = AppAccentOrange,
                     style = MaterialTheme.typography.labelSmall
                 )
             }
@@ -631,17 +659,25 @@ fun AccountScreen(
         platforms.forEach { platform -> SportsPlatformCard(platform) }
 
         Text(
-            "La vinculación está detenida intencionalmente. No se solicitará acceso a Strava, Garmin ni Wahoo hasta que esta función sea habilitada.",
+            "Strava será la primera integración visible. Garmin y Wahoo quedan reservados para una etapa posterior, sin solicitar permisos todavía.",
             color = AppTextSecondary,
             style = MaterialTheme.typography.bodySmall
         )
 
         if (session != null) {
             HorizontalDivider(color = AppBorderSubtle)
+            if (profileBikesLoading) {
+                AppSkeleton(Modifier.fillMaxWidth().height(82.dp))
+            }
+            profileBikesError?.let { ErrorBanner(it) }
             ProfileContentSection(
                 account = session,
+                bikes = bikes,
                 isActive = isActive,
-                onSocialPostCountChanged = { socialPostCount = it }
+                onSocialPostCountChanged = { socialPostCount = it },
+                onMeetupCountChanged = { routeCount = it },
+                onOpenBikes = onOpenBikes,
+                onOpenRoutes = onOpenRoutes
             )
             HorizontalDivider(color = AppBorderSubtle)
         }
@@ -741,6 +777,7 @@ private fun RiderProfileHeader(
     photoUri: String,
     bikeCount: Int,
     socialPostCount: Int,
+    routeCount: Int,
     isEditing: Boolean,
     bioDraft: String,
     onEditBio: () -> Unit,
@@ -800,7 +837,7 @@ private fun RiderProfileHeader(
         ) {
             ProfileStat(value = socialPostCount.toString(), label = "Posts", Modifier.weight(1f))
             ProfileStat(value = bikeCount.toString(), label = "Bicis", Modifier.weight(1f))
-            ProfileStat(value = "—", label = "Rutas", Modifier.weight(1f))
+            ProfileStat(value = routeCount.toString(), label = "Rutas", Modifier.weight(1f))
         }
 
         if (isEditing) {
@@ -1256,6 +1293,12 @@ internal fun SportsPlatformCard(
 ) {
     val fontScale = LocalDensity.current.fontScale
     val largeText = fontScale >= 1.6f
+    val isComingSoon = platform.id.equals("strava", ignoreCase = true)
+    val platformAccent = when (platform.id.lowercase()) {
+        "strava" -> AppAccentOrange
+        "garmin" -> AppAccentBlue
+        else -> AppPrimaryBright
+    }
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -1264,14 +1307,15 @@ internal fun SportsPlatformCard(
                     append(platform.name)
                     append(". ")
                     append(platform.description)
-                    append(" Vinculación en pausa. Próximamente.")
+                    append(" Vinculación en pausa.")
+                    if (isComingSoon) append(" Próximamente.")
                 }
             },
         colors = CardDefaults.cardColors(
             containerColor = AppSurfaceElevated
         ),
         shape = RoundedCornerShape(AppDimens.RadiusLarge),
-        border = BorderStroke(1.dp, AppPrimary.copy(alpha = 0.24f)),
+            border = BorderStroke(1.dp, platformAccent.copy(alpha = 0.34f)),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Box(Modifier.fillMaxWidth()) {
@@ -1280,7 +1324,7 @@ internal fun SportsPlatformCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 20.dp)
-                        .padding(top = 30.dp),
+                        .padding(top = if (isComingSoon) 30.dp else 12.dp),
                     verticalArrangement = Arrangement.spacedBy(AppDimens.Space3)
                 ) {
                     Row(
@@ -1301,9 +1345,9 @@ internal fun SportsPlatformCard(
                         color = AppTextSecondary
                     )
                     Text(
-                        "Vinculación en pausa",
+                        if (isComingSoon) "Vinculación en pausa · próximamente" else "Vinculación en pausa",
                         style = MaterialTheme.typography.labelMedium,
-                        color = AppWarning
+                        color = platformAccent
                     )
                 }
             } else {
@@ -1323,25 +1367,27 @@ internal fun SportsPlatformCard(
                 }
             }
 
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .offset(x = 32.dp, y = 15.dp)
-                    .rotate(34f),
-                color = AppPrimary,
-                shadowElevation = 6.dp
-            ) {
-                Text(
-                    "PRÓXIMAMENTE",
+            if (isComingSoon) {
+                Surface(
                     modifier = Modifier
-                        .clearAndSetSemantics { }
-                        .padding(horizontal = 30.dp, vertical = 6.dp),
-                    color = AppBackground,
-                    fontSize = (9f / fontScale.coerceAtLeast(1f)).sp,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = (1f / fontScale.coerceAtLeast(1f)).sp,
-                    maxLines = 1
-                )
+                        .align(Alignment.TopEnd)
+                        .offset(x = 32.dp, y = 15.dp)
+                        .rotate(34f),
+                    color = platformAccent,
+                    shadowElevation = 6.dp
+                ) {
+                    Text(
+                        "PRÓXIMAMENTE",
+                        modifier = Modifier
+                            .clearAndSetSemantics { }
+                            .padding(horizontal = 30.dp, vertical = 6.dp),
+                        color = AppBackground,
+                        fontSize = (9f / fontScale.coerceAtLeast(1f)).sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = (1f / fontScale.coerceAtLeast(1f)).sp,
+                        maxLines = 1
+                    )
+                }
             }
         }
     }

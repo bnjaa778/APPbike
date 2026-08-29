@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -140,7 +141,8 @@ object ChatNotificationCenter {
 
     internal fun listenerNotification(context: Context) =
         NotificationCompat.Builder(context, LISTENER_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_chat_notification)
+            .setSmallIcon(R.drawable.appbike_notification_icon)
+            .setLargeIcon(BitmapFactory.decodeResource(context.resources, R.drawable.appbike_brand_icon))
             .setContentTitle("APPBIKE")
             .setContentText("Escuchando mensajes nuevos")
             .setContentIntent(
@@ -214,7 +216,8 @@ object ChatNotificationCenter {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_chat_notification)
+            .setSmallIcon(R.drawable.appbike_notification_icon)
+            .setLargeIcon(BitmapFactory.decodeResource(context.resources, R.drawable.appbike_brand_icon))
             .setContentTitle(event.senderName)
             .setContentText(event.message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(event.message))

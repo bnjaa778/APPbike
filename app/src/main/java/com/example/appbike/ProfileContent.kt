@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.PhotoCamera
+import androidx.compose.material.icons.outlined.PedalBike
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -60,8 +61,12 @@ private val PROFILE_MARKETPLACE_STATUSES = listOf(
 @Composable
 internal fun ProfileContentSection(
     account: AccountSession,
+    bikes: List<Bike> = emptyList(),
     isActive: Boolean = true,
-    onSocialPostCountChanged: (Int) -> Unit = {}
+    onSocialPostCountChanged: (Int) -> Unit = {},
+    onMeetupCountChanged: (Int) -> Unit = {},
+    onOpenBikes: () -> Unit = {},
+    onOpenRoutes: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -85,6 +90,10 @@ internal fun ProfileContentSection(
 
     LaunchedEffect(socialPosts.size) {
         onSocialPostCountChanged(socialPosts.size)
+    }
+
+    LaunchedEffect(meetups.size) {
+        onMeetupCountChanged(meetups.size)
     }
 
     suspend fun reload() {
@@ -135,9 +144,45 @@ internal fun ProfileContentSection(
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Tu contenido", style = MaterialTheme.typography.titleLarge)
         Text(
-            "Comparte experiencias con riders y administra tus espacios de Marketplace.",
+            "Posts, bicicletas y rutas en un solo lugar. Comparte con riders y administra tu actividad.",
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+
+        Text("Tus bicicletas", fontWeight = FontWeight.Bold)
+        if (bikes.isEmpty()) {
+            Text(
+                "Todavía no tienes bicicletas guardadas.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            bikes.take(3).forEach { bike ->
+                ProfileItemCard(
+                    title = bike.name.ifBlank { "Bicicleta ${bike.brand}" },
+                    detail = listOf(bike.brand, bike.model, bike.type)
+                        .filter(String::isNotBlank)
+                        .joinToString(" · "),
+                    status = if (bike.nextMaintenance.isBlank()) {
+                        "En tu garaje"
+                    } else {
+                        "Próxima mantención: ${bike.nextMaintenance}"
+                    },
+                    onClick = onOpenBikes
+                )
+            }
+            if (bikes.size > 3) {
+                Text(
+                    "+${bikes.size - 3} bicicletas más en tu garaje",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = onOpenBikes) {
+            Icon(Icons.Outlined.PedalBike, contentDescription = null)
+            Spacer(Modifier.size(8.dp))
+            Text("Abrir Mi garaje")
+        }
+
         Text("Publicaciones sociales", fontWeight = FontWeight.Bold)
         Text(
             "Fotos, videos y aventuras personales. Se guardan en este dispositivo hasta que el backend social esté disponible.",
@@ -214,7 +259,14 @@ internal fun ProfileContentSection(
             )
         }
 
-        Text("Juntas creadas", fontWeight = FontWeight.Bold)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+        ) {
+            Text("Rutas y juntas creadas", fontWeight = FontWeight.Bold)
+            TextButton(onClick = onOpenRoutes) { Text("Ver mapa") }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
                 selected = meetupStatus == "activa",
@@ -231,9 +283,9 @@ internal fun ProfileContentSection(
         if (!loading && visibleMeetups.isEmpty()) {
             Text(
                 if (meetupStatus == "pasada") {
-                    "Aún no tienes juntas anteriores."
+                    "Aún no tienes rutas o juntas anteriores."
                 } else {
-                    "No tienes juntas actuales."
+                    "No tienes rutas o juntas actuales."
                 },
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

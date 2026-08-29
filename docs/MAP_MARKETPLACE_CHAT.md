@@ -31,6 +31,8 @@ horizontal, la cabecera se compacta en una línea y la navegación usa 56 dp con
   Inicio, Marketplace, Mapa, Chat y Perfil. Un `HorizontalPager` mantiene las
   cinco paginas montadas para conservar estado; cada una difiere su primera
   carga hasta activarse. Bicicletas queda como `Mi garaje` secundario desde Perfil.
+  En Mapa el gesto iniciado sobre el lienzo queda para el paneo de MapLibre; al
+  iniciar sobre controles Compose se conserva el swipe entre destinos.
 
 ## Mapa y juntas regionales
 
@@ -87,8 +89,12 @@ MapLibre se detiene en 17 y no permite sobrezoom hacia niveles problematicos.
 
 Para conservar acceso por teclado alrededor del `AndroidView`, la lupa, capas y
 las acciones `Trayecto`/`Junta` se componen antes del mapa y se dibujan por encima
-con `zIndex(1f)`. Al tocar la lupa aparecen el buscador y la fila de ubicacion
-sobre superficies semitransparentes.
+con `zIndex(1f)`, en la misma esquina superior y dentro de superficies
+semitransparentes. `Trayecto`/`Junta` forman un selector segmentado compacto con
+dos botones equilibrados, borde sutil y elevación ligera para mantener el mapa
+visible bajo el control. Un gesto sobre el lienzo desactiva temporalmente el
+swipe del pager para que MapLibre conserve el paneo horizontal; los controles
+superiores mantienen disponible el desplazamiento entre pestañas.
 
 El onboarding y la corrección de ubicación no cambian: permisos Android en el
 primer ingreso, confirmación antes de persistir y sugerencias en vivo. La capa
