@@ -27,12 +27,14 @@ La navegación raíz compone cabecera, contenido y barra inferior como hermanos
 directos. El contenido central se recorta para contener MapLibre y los fondos
 decorativos, mientras las barras persistentes conservan prioridad visual. En
 horizontal, la cabecera se compacta en una línea y la navegación usa 56 dp con
-  iconos compactos y mantiene la semántica completa de los cinco destinos:
-  Inicio, Marketplace, Mapa, Chat y Perfil. Un `HorizontalPager` mantiene las
-  cinco paginas montadas para conservar estado; cada una difiere su primera
-  carga hasta activarse. Bicicletas queda como `Mi garaje` secundario desde Perfil.
-  En Mapa el gesto iniciado sobre el lienzo queda para el paneo de MapLibre; al
-  iniciar sobre controles Compose se conserva el swipe entre destinos.
+iconos compactos y mantiene la semántica completa de los cinco destinos:
+Inicio, Marketplace, Mapa, Chat y Perfil. Un `HorizontalPager` mantiene las
+cinco paginas montadas para conservar estado; cada una difiere su primera
+carga hasta activarse. Bicicletas queda como `Mi garaje` secundario desde Perfil.
+En Mapa el gesto iniciado sobre el lienzo queda para el paneo de MapLibre; al
+iniciar sobre controles Compose se conserva el swipe entre destinos. En ese
+destino la cabecera global no ocupa espacio: `MapView` es la capa base y el
+selector, búsqueda, clima y controles son overlays dentro del área segura.
 
 ## Mapa y juntas regionales
 
@@ -44,15 +46,19 @@ la actualizacion tardia de la fuente GeoJSON. En la validacion real del
 
 La pantalla mantiene MapLibre Native OpenGL 13.4.1. Dentro del pager crea el
 `MapView` en modo TextureView solo al primer ingreso y baja su FPS fuera de
-pantalla. Un boton circular con el
-icono universal de capas abre el menu `Mapa`/`Satélite`; la interfaz inicial deja
-solo ese control y una lupa bajo la cabecera. `Mapa` usa Liberty de OpenFreeMap y
-`Satélite` World Imagery de Esri con una capa de etiquetas de referencia. Cambiar de modo reutiliza el
-mismo `MapView`, aplica `setStyle` sobre el mapa activo, conserva el centro
-vigente y vuelve a instalar las tres fuentes GeoJSON de APPbike. Un identificador
-de solicitud descarta callbacks tardios de estilos anteriores. El logo textual
-de MapLibre esta oculto, pero el control
-pequeño de atribucion sigue activo y cada fuente satelital declara sus creditos.
+pantalla. El mapa queda como capa base de todo el contenido central. El overlay
+superior alinea en una fila el selector de bicicleta, la búsqueda y el widget
+de clima; debajo del bloque izquierdo ubica `Trayecto` y `Junta`; bajo el clima
+alinea brújula, capas y ubicación en una sola columna. Un botón circular con el
+icono universal de capas abre la hoja `Mapa`/`Satélite`/`Híbrido`. `Mapa` usa
+Liberty de OpenFreeMap, `Satélite` World Imagery de Esri con una capa de
+etiquetas de referencia, y `Híbrido` combina la imagen satelital con calles,
+senderos ciclistas y nombres de calle vectoriales de OpenFreeMap. Cambiar de
+modo reutiliza el mismo `MapView`, aplica `setStyle` sobre el mapa activo,
+conserva el centro vigente y vuelve a instalar las tres fuentes GeoJSON de
+APPbike. Un identificador de solicitud descarta callbacks tardios de estilos
+anteriores. El logo textual de MapLibre esta oculto, pero el control pequeño de
+atribucion sigue activo y cada fuente satelital declara sus creditos.
 La migracion API 37 se valido con la regresion de fuente tardia y un render real
 del mapa tanto en Android 16 como en el AVD `APPbike_API_37` Android 17, sin
 error de carga nativa. El
@@ -81,23 +87,42 @@ recibe el Bearer de APPbike y no ofrece SLA. Antes de publicar comercialmente se
 debe usar un proxy del backend o una instancia propia de OSRM y conservar la
 atribucion `© OpenStreetMap contributors`.
 
+La brújula visible es un control Compose sincronizado con el sensor de rotación
+del dispositivo, con respaldo de acelerómetro/campo magnético, corrección de
+declinación magnética y suavizado del rumbo. Muestra el punto cardinal y grados
+para reconocer N, E, S y O mientras el usuario gira el teléfono; al tocarla
+orienta la cámara del mapa a 0° sin cambiar la ubicación persistida. El botón
+`Centrar en mi ubicación` solicita siempre una nueva lectura GPS/red, publica el
+punto de inmediato y lo muestra con un punto circular verde más el marcador. El
+selector compacto de la barra superior
+ofrece `Bicicleta de ruta`, `Gravel` y `Mountain Bike`; la elección se guarda
+solo en `LocalDataStore` y se refleja en el encabezado del mapa y en el panel del
+trayecto. Capas, brújula y centrar ubicación se mantienen en un riel lateral de
+controles útiles, sin agregar un 3D que no esté implementado. No se muestra ni
+se calcula un indicador de porcentaje de asfalto. El ruteador remoto mantiene el
+contrato actual; si se usa la línea directa de respaldo, la velocidad estimada
+se adapta al perfil elegido.
+
 Las fuentes raster satelitales anuncian zoom 19, pero en sectores de Puerto
 Varas World Imagery devuelve en ese nivel una tesela gris `Map data not yet
 available`; una tesela puntual conserva imagen en 18, pero el zoom anclado puede
 alcanzar sectores vecinos sin cobertura en ese mismo nivel. Por eso la camara de
 MapLibre se detiene en 17 y no permite sobrezoom hacia niveles problematicos.
 
-Para conservar acceso por teclado alrededor del `AndroidView`, la lupa, capas y
-las acciones `Trayecto`/`Junta` se componen antes del mapa y se dibujan por encima
-con `zIndex(1f)`, en la misma esquina superior y dentro de superficies
-semitransparentes. `Trayecto`/`Junta` forman un selector segmentado compacto con
-dos botones equilibrados, borde sutil y elevación ligera para mantener el mapa
-visible bajo el control. Un gesto sobre el lienzo desactiva temporalmente el
+Para conservar acceso por teclado alrededor del `AndroidView`, el overlay superior,
+el riel de controles y las acciones `Trayecto`/`Junta` se componen antes del mapa
+y se dibujan por encima con `zIndex(1f)`, dentro de superficies semitransparentes.
+La fila superior izquierda contiene el selector y búsqueda; la fila siguiente
+contiene Trayecto/Junta, mientras brújula, capas y ubicación comparten una única
+columna bajo el clima. Un gesto sobre el lienzo desactiva temporalmente el
 swipe del pager para que MapLibre conserve el paneo horizontal; los controles
 superiores mantienen disponible el desplazamiento entre pestañas.
 
-El onboarding y la corrección de ubicación no cambian: permisos Android en el
-primer ingreso, confirmación antes de persistir y sugerencias en vivo. La capa
+El onboarding y la corrección manual de ubicación no cambian: permisos Android
+en el primer ingreso, confirmación antes de persistir y sugerencias en vivo.
+El botón de ubicación permite además confirmar directamente la posición actual
+del dispositivo para recentrar el mapa sin depender de una ubicación guardada.
+La capa
 remota intenta primero `location.search`/`location.reverse`. La búsqueda remota
 ya devuelve lugares normalizados, pero la resolución inversa aún puede responder
 `unknown_region`; `android.location.Geocoder` y Nominatim permanecen como

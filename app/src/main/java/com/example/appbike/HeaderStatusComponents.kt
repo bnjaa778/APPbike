@@ -3,6 +3,7 @@ package com.example.appbike
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Row
@@ -13,17 +14,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -45,6 +53,8 @@ import com.example.appbike.ui.theme.AppPrimaryBright
 import com.example.appbike.ui.theme.AppSurfaceElevated
 import com.example.appbike.ui.theme.AppTextPrimary
 import com.example.appbike.ui.theme.AppTextSecondary
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -157,6 +167,78 @@ internal fun WeatherStatusChip(
                     maxLines = 1
                 )
             }
+        }
+    }
+}
+
+@Composable
+internal fun WeatherStatusPopover(
+    state: WeatherHeaderState,
+    compact: Boolean,
+    modifier: Modifier = Modifier
+) {
+    var forecastOpen by remember { mutableStateOf(false) }
+    var forecastState by remember {
+        mutableStateOf<WeatherForecastState>(WeatherForecastState.Idle)
+    }
+    val currentWeather = (state as? WeatherHeaderState.Ready)?.snapshot
+
+    LaunchedEffect(
+        forecastOpen,
+        state::class,
+        currentWeather?.latitude,
+        currentWeather?.longitude
+    ) {
+        if (!forecastOpen) {
+            forecastState = WeatherForecastState.Idle
+            return@LaunchedEffect
+        }
+        val weather = currentWeather
+        if (weather == null) {
+            forecastState = when (state) {
+                WeatherHeaderState.Loading -> WeatherForecastState.Loading
+                WeatherHeaderState.WaitingForLocation -> WeatherForecastState.Unavailable(
+                    "Concede permiso de ubicación para consultar el pronóstico."
+                )
+                is WeatherHeaderState.Unavailable -> WeatherForecastState.Unavailable(state.reason)
+                is WeatherHeaderState.Ready -> WeatherForecastState.Unavailable(
+                    "No se pudo obtener la ubicación para consultar el pronóstico."
+                )
+            }
+            return@LaunchedEffect
+        }
+        forecastState = WeatherForecastState.Loading
+        val result = runSuspendCatching {
+            withContext(Dispatchers.IO) {
+                RemoteConnections.loadWeatherForecast(
+                    latitude = weather.latitude,
+                    longitude = weather.longitude
+                )
+            }
+        }
+        forecastState = result.fold(
+            onSuccess = WeatherForecastState::Ready,
+            onFailure = {
+                WeatherForecastState.Unavailable(RemoteConnections.userFriendlyError(it))
+            }
+        )
+    }
+
+    Box(modifier) {
+        WeatherStatusChip(
+            state = state,
+            compact = compact,
+            onClick = { forecastOpen = !forecastOpen }
+        )
+        DropdownMenu(
+            expanded = forecastOpen,
+            onDismissRequest = { forecastOpen = false },
+            modifier = Modifier.widthIn(min = 280.dp, max = 340.dp)
+        ) {
+            WeatherForecastPanel(
+                state = forecastState,
+                onClose = { forecastOpen = false }
+            )
         }
     }
 }

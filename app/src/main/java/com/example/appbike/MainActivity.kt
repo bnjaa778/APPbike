@@ -50,7 +50,6 @@ import androidx.compose.material.icons.outlined.Storefront
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -89,7 +88,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import androidx.compose.foundation.layout.widthIn
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.lifecycle.Lifecycle
@@ -743,6 +741,7 @@ fun AppBikeApp(
                     currentScreen = AppScreen.CHAT
                 },
                 onOpenAccount = { currentScreen = AppScreen.ACCOUNT },
+                weatherState = weatherState,
                 initialMeetupId = meetupToOpenId,
                 onInitialMeetupConsumed = { meetupToOpenId = null },
                 isActive = isActive,
@@ -795,17 +794,19 @@ fun AppBikeApp(
         color = MaterialTheme.colorScheme.background
     ) {
         Column(Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .zIndex(1f)
-            ) {
-                AppTopBar(
-                    session = accountSession,
-                    accountSelected = mainDestinationFor(currentScreen) == AppScreen.ACCOUNT,
-                    weatherState = weatherState,
-                    onAccountClick = { currentScreen = AppScreen.ACCOUNT }
-                )
+            if (currentScreen != AppScreen.ROUTES) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .zIndex(1f)
+                ) {
+                    AppTopBar(
+                        session = accountSession,
+                        accountSelected = mainDestinationFor(currentScreen) == AppScreen.ACCOUNT,
+                        weatherState = weatherState,
+                        onAccountClick = { currentScreen = AppScreen.ACCOUNT }
+                    )
+                }
             }
 
             Box(
@@ -990,54 +991,6 @@ internal fun AppTopBar(
 ) {
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val compactCopy = LocalDensity.current.fontScale >= 1.6f || isLandscape
-    var weatherForecastOpen by remember { mutableStateOf(false) }
-    var weatherForecastState by remember {
-        mutableStateOf<WeatherForecastState>(WeatherForecastState.Idle)
-    }
-    val currentWeather = (weatherState as? WeatherHeaderState.Ready)?.snapshot
-
-    LaunchedEffect(
-        weatherForecastOpen,
-        weatherState::class,
-        currentWeather?.latitude,
-        currentWeather?.longitude
-    ) {
-        if (!weatherForecastOpen) {
-            weatherForecastState = WeatherForecastState.Idle
-            return@LaunchedEffect
-        }
-        val weather = currentWeather
-        if (weather == null) {
-            weatherForecastState = when (weatherState) {
-                WeatherHeaderState.Loading -> WeatherForecastState.Loading
-                WeatherHeaderState.WaitingForLocation -> WeatherForecastState.Unavailable(
-                    "Concede permiso de ubicación para consultar el pronóstico."
-                )
-                is WeatherHeaderState.Unavailable -> WeatherForecastState.Unavailable(
-                    weatherState.reason
-                )
-                is WeatherHeaderState.Ready -> WeatherForecastState.Unavailable(
-                    "No se pudo obtener la ubicación para consultar el pronóstico."
-                )
-            }
-            return@LaunchedEffect
-        }
-        weatherForecastState = WeatherForecastState.Loading
-        val result = runSuspendCatching {
-            withContext(Dispatchers.IO) {
-                RemoteConnections.loadWeatherForecast(
-                    latitude = weather.latitude,
-                    longitude = weather.longitude
-                )
-            }
-        }
-        weatherForecastState = result.fold(
-            onSuccess = WeatherForecastState::Ready,
-            onFailure = {
-                WeatherForecastState.Unavailable(RemoteConnections.userFriendlyError(it))
-            }
-        )
-    }
 
     Surface(
         modifier = Modifier
@@ -1140,21 +1093,10 @@ internal fun AppTopBar(
             Box(
                 modifier = Modifier
             ) {
-                WeatherStatusChip(
+                WeatherStatusPopover(
                     state = weatherState,
-                    compact = compactCopy,
-                    onClick = { weatherForecastOpen = !weatherForecastOpen }
+                    compact = compactCopy
                 )
-                DropdownMenu(
-                    expanded = weatherForecastOpen,
-                    onDismissRequest = { weatherForecastOpen = false },
-                    modifier = Modifier.widthIn(min = 280.dp, max = 340.dp)
-                ) {
-                    WeatherForecastPanel(
-                        state = weatherForecastState,
-                        onClose = { weatherForecastOpen = false }
-                    )
-                }
             }
         }
     }

@@ -1,11 +1,20 @@
 package com.example.appbike
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.hardware.GeomagneticField
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.os.SystemClock
+import android.view.Surface
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,6 +26,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,8 +34,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -40,10 +52,16 @@ import androidx.compose.material.icons.automirrored.outlined.DirectionsBike
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Explore
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.LocationOn
+import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.MyLocation
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.SatelliteAlt
+import androidx.compose.material.icons.outlined.Route
+import androidx.compose.material.icons.outlined.Terrain
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -67,6 +85,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -78,6 +97,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -85,6 +106,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -93,10 +116,15 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.zIndex
+import com.example.appbike.ui.theme.AppBackground
 import com.example.appbike.ui.theme.AppBackgroundElevated
+import com.example.appbike.ui.theme.AppAccentAmber
+import com.example.appbike.ui.theme.AppAccentBlue
+import com.example.appbike.ui.theme.AppAccentOrange
 import com.example.appbike.ui.theme.AppBorderSubtle
 import com.example.appbike.ui.theme.AppPrimary
 import com.example.appbike.ui.theme.AppPrimaryBright
@@ -129,9 +157,15 @@ import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.PropertyFactory.iconAllowOverlap
 import org.maplibre.android.style.layers.PropertyFactory.iconIgnorePlacement
 import org.maplibre.android.style.layers.PropertyFactory.iconImage
+import org.maplibre.android.style.layers.PropertyFactory.circleColor
+import org.maplibre.android.style.layers.PropertyFactory.circleOpacity
+import org.maplibre.android.style.layers.PropertyFactory.circleRadius
+import org.maplibre.android.style.layers.PropertyFactory.circleStrokeColor
+import org.maplibre.android.style.layers.PropertyFactory.circleStrokeWidth
 import org.maplibre.android.style.layers.PropertyFactory.lineColor
 import org.maplibre.android.style.layers.PropertyFactory.lineOpacity
 import org.maplibre.android.style.layers.PropertyFactory.lineWidth
+import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
@@ -191,16 +225,175 @@ private const val SATELLITE_MAP_STYLE = """
       ]
     }
 """
+private const val HYBRID_MAP_STYLE = """
+    {
+      "version": 8,
+      "name": "APPbike Híbrido",
+      "glyphs": "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
+      "sources": {
+        "esri-world-imagery": {
+          "type": "raster",
+          "tiles": [
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+          ],
+          "tileSize": 256,
+          "minzoom": 0,
+          "maxzoom": 19,
+          "attribution": "Imagenes: Esri, Vantor, Earthstar Geographics y la comunidad GIS"
+        },
+        "esri-world-labels": {
+          "type": "raster",
+          "tiles": [
+            "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
+          ],
+          "tileSize": 256,
+          "minzoom": 0,
+          "maxzoom": 19,
+          "attribution": "Etiquetas: Esri, HERE, Garmin, OpenStreetMap y la comunidad GIS"
+        },
+        "openmaptiles": {
+          "type": "vector",
+          "url": "https://tiles.openfreemap.org/planet"
+        }
+      },
+      "layers": [
+        {
+          "id": "hybrid-background",
+          "type": "background",
+          "paint": { "background-color": "#06100C" }
+        },
+        {
+          "id": "hybrid-imagery",
+          "type": "raster",
+          "source": "esri-world-imagery"
+        },
+        {
+          "id": "hybrid-road-casing",
+          "type": "line",
+          "source": "openmaptiles",
+          "source-layer": "transportation",
+          "filter": [
+            "match",
+            ["get", "class"],
+            ["motorway", "trunk", "primary", "secondary", "tertiary", "street", "street_limited", "service", "track", "path", "cycleway"],
+            true,
+            false
+          ],
+          "layout": { "line-cap": "round", "line-join": "round" },
+          "paint": {
+            "line-color": "rgba(5, 14, 11, 0.82)",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 8, 1, 12, 2.2, 17, 7]
+          }
+        },
+        {
+          "id": "hybrid-roads",
+          "type": "line",
+          "source": "openmaptiles",
+          "source-layer": "transportation",
+          "filter": [
+            "match",
+            ["get", "class"],
+            ["motorway", "trunk", "primary", "secondary", "tertiary", "street", "street_limited", "service"],
+            true,
+            false
+          ],
+          "layout": { "line-cap": "round", "line-join": "round" },
+          "paint": {
+            "line-color": "rgba(245, 250, 239, 0.92)",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0.45, 12, 1.15, 17, 4.1]
+          }
+        },
+        {
+          "id": "hybrid-bike-paths",
+          "type": "line",
+          "source": "openmaptiles",
+          "source-layer": "transportation",
+          "filter": [
+            "match",
+            ["get", "class"],
+            ["cycleway", "path", "track", "pedestrian"],
+            true,
+            false
+          ],
+          "layout": { "line-cap": "round", "line-join": "round" },
+          "paint": {
+            "line-color": "rgba(48, 241, 150, 0.96)",
+            "line-dasharray": [1.2, 1.2],
+            "line-width": ["interpolate", ["linear"], ["zoom"], 10, 0.8, 15, 2.2, 18, 4.4]
+          }
+        },
+        {
+          "id": "hybrid-street-names",
+          "type": "symbol",
+          "source": "openmaptiles",
+          "source-layer": "transportation_name",
+          "minzoom": 11,
+          "layout": {
+            "text-field": ["coalesce", ["get", "name"], ["get", "name_en"]],
+            "text-font": ["Noto Sans Regular"],
+            "text-size": ["interpolate", ["linear"], ["zoom"], 11, 9, 16, 12],
+            "text-max-width": 8,
+            "text-padding": 2,
+            "symbol-placement": "line"
+          },
+          "paint": {
+            "text-color": "rgba(255, 255, 255, 0.94)",
+            "text-halo-color": "rgba(3, 12, 8, 0.86)",
+            "text-halo-width": 1.8
+          }
+        },
+        {
+          "id": "hybrid-place-labels",
+          "type": "raster",
+          "source": "esri-world-labels"
+        }
+      ]
+    }
+"""
 internal enum class MapStyleMode(
     val visibleLabel: String,
     val styleDefinition: String,
-    val maximumCameraZoom: Double
+    val maximumCameraZoom: Double,
+    val description: String
 ) {
-    MAPA("Mapa", OPEN_FREE_MAP_STYLE, STREET_MAX_CAMERA_ZOOM),
-    SATELITE("Satélite", SATELLITE_MAP_STYLE, SATELLITE_MAX_CAMERA_ZOOM)
+    MAPA(
+        "Mapa",
+        OPEN_FREE_MAP_STYLE,
+        STREET_MAX_CAMERA_ZOOM,
+        "Calles, senderos y lugares"
+    ),
+    SATELITE(
+        "Satélite",
+        SATELLITE_MAP_STYLE,
+        SATELLITE_MAX_CAMERA_ZOOM,
+        "Terreno real desde arriba"
+    ),
+    HIBRIDO(
+        "Híbrido",
+        HYBRID_MAP_STYLE,
+        SATELLITE_MAX_CAMERA_ZOOM,
+        "Satélite con calles destacadas"
+    )
+}
+
+internal enum class CyclingMode(
+    val visibleLabel: String,
+    val compactLabel: String,
+    val tagline: String,
+    val averageSpeedKmh: Double
+) {
+    RUTA("Bicicleta de ruta", "Ruta", "Ritmo equilibrado para explorar", 18.0),
+    GRAVEL("Gravel", "Gravel", "Larga distancia, mezcla de superficies", 16.0),
+    MOUNTAIN_BIKE("Mountain Bike", "MTB", "Senderos, desnivel y aventura", 13.0);
+
+    companion object {
+        fun fromStored(value: String?): CyclingMode =
+            entries.firstOrNull { it.name == value } ?: RUTA
+    }
 }
 internal const val LOCATION_SEARCH_PANEL_TEST_TAG = "location_search_panel"
 private const val USER_SOURCE_ID = "appbike-user-source"
+private const val USER_DOT_LAYER_ID = "appbike-user-dot-layer"
 private const val USER_LAYER_ID = "appbike-user-layer"
 private const val USER_ICON_ID = "appbike-user-icon"
 private const val MEETUP_SOURCE_ID = "appbike-meetup-source"
@@ -232,10 +425,11 @@ private fun Modifier.mapPagerSwipeRegion(
 }
 
 @Composable
-fun RoutesScreen(
+internal fun RoutesScreen(
     account: AccountSession?,
     onOpenChat: (UserChat) -> Unit = {},
     onOpenAccount: () -> Unit = {},
+    weatherState: WeatherHeaderState = WeatherHeaderState.WaitingForLocation,
     initialMeetupId: String? = null,
     onInitialMeetupConsumed: () -> Unit = {},
     isActive: Boolean = true,
@@ -258,6 +452,12 @@ fun RoutesScreen(
     }
     var locationSetupMessage by remember { mutableStateOf<String?>(null) }
     var mapStyleMode by remember { mutableStateOf(MapStyleMode.MAPA) }
+    var cyclingMode by remember {
+        mutableStateOf(
+            CyclingMode.fromStored(LocalDataStore.loadMapCyclingMode(context))
+        )
+    }
+    var cyclingModeMenuExpanded by remember { mutableStateOf(false) }
     var searchControlsExpanded by remember { mutableStateOf(false) }
     var mapStyleMenuExpanded by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
@@ -277,6 +477,9 @@ fun RoutesScreen(
     var hasLoaded by remember { mutableStateOf(false) }
     var mapActivated by remember { mutableStateOf(false) }
     var locationRequestStarted by remember { mutableStateOf(false) }
+    var locationRequestId by remember { mutableIntStateOf(0) }
+    var locationJob by remember { mutableStateOf<Job?>(null) }
+    var commitDeviceLocationAfterPermission by remember { mutableStateOf(false) }
     var routePreview by remember { mutableStateOf<CyclingRoutePreview?>(null) }
     var routeTitle by remember { mutableStateOf("") }
     var routeDestinationPicker by remember { mutableStateOf(false) }
@@ -284,6 +487,14 @@ fun RoutesScreen(
     var routeNotice by remember { mutableStateOf<String?>(null) }
     var routeRequestId by remember { mutableIntStateOf(0) }
     var routeJob by remember { mutableStateOf<Job?>(null) }
+    var cameraBearing by remember { mutableDoubleStateOf(0.0) }
+    var compassResetRequest by remember { mutableIntStateOf(0) }
+
+    fun selectCyclingMode(mode: CyclingMode) {
+        cyclingMode = mode
+        LocalDataStore.saveMapCyclingMode(context, mode.name)
+        cyclingModeMenuExpanded = false
+    }
 
     fun refresh(point: GeoPoint = center) {
         val requestedQuery = query
@@ -405,6 +616,7 @@ fun RoutesScreen(
             locationSetupStep = LocationSetupStep.MANUAL
             return
         }
+        val routeMode = cyclingMode
         if (destination.latitude !in -90.0..90.0 ||
             destination.longitude !in -180.0..180.0
         ) {
@@ -437,7 +649,11 @@ fun RoutesScreen(
             if (requestId != routeRequestId) return@launch
             result.onSuccess { routePreview = it }
                 .onFailure { failure ->
-                    routePreview = buildDirectCyclingRoutePreview(origin, destination)
+                    routePreview = buildDirectCyclingRoutePreview(
+                        origin,
+                        destination,
+                        averageSpeedKmh = routeMode.averageSpeedKmh
+                    )
                     routeNotice =
                         "No pudimos seguir las calles ahora. Se muestra una línea directa de respaldo: " +
                             RemoteConnections.userFriendlyError(failure)
@@ -503,40 +719,66 @@ fun RoutesScreen(
         LocalDataStore.saveLocation(context, point)
         refresh(point)
         scope.launch {
-            val resolved = withContext(Dispatchers.IO) {
-                RemoteConnections.resolveCommunityLocation(point)
+            val resolvedResult = runSuspendCatching {
+                withContext(Dispatchers.IO) {
+                    RemoteConnections.resolveCommunityLocation(point)
+                }
             }
             if (commitId != locationCommitId) return@launch
-            if (resolved != point) {
-                userLocation = resolved
-                center = resolved
-                LocalDataStore.saveLocation(context, resolved)
-                refresh(resolved)
+            resolvedResult.onSuccess { resolved ->
+                if (resolved != point) {
+                    userLocation = resolved
+                    center = resolved
+                    LocalDataStore.saveLocation(context, resolved)
+                    refresh(resolved)
+                }
             }
         }
     }
 
-    fun locateDevice() {
+    fun locateDevice(commitImmediately: Boolean = false) {
+        val requestId = locationRequestId + 1
+        locationRequestId = requestId
+        locationJob?.cancel()
         locationSetupStep = LocationSetupStep.LOCATING
         locationSetupMessage = null
-        scope.launch {
-            runSuspendCatching {
-                withContext(Dispatchers.IO) {
-                    val devicePoint = DeviceLocationProvider.currentLocation(context)
-                    runCatching {
-                        RemoteConnections.reverseGeocodeLocation(devicePoint)
-                    }.getOrElse {
-                        devicePoint.copy(label = devicePoint.coordinateLabel())
+        locationJob = scope.launch {
+            try {
+                val devicePointResult = runSuspendCatching {
+                    withContext(Dispatchers.IO) {
+                        DeviceLocationProvider.currentLocation(context)
                     }
                 }
-            }.onSuccess { point ->
-                pendingLocation = point
-                center = point
-                locationSetupStep = LocationSetupStep.CONFIRM
-            }.onFailure { locationError ->
-                locationSetupMessage = locationError.message
-                    ?: "No fue posible obtener la ubicación actual."
-                locationSetupStep = LocationSetupStep.MANUAL
+                if (requestId != locationRequestId) return@launch
+
+                devicePointResult.onSuccess { devicePoint ->
+                    if (commitImmediately) {
+                        // Publicar el punto inmediatamente evita que una
+                        // resolución de dirección lenta oculte la ubicación.
+                        commitLocation(devicePoint)
+                    } else {
+                        val point = runSuspendCatching {
+                            withContext(Dispatchers.IO) {
+                                runCatching {
+                                    RemoteConnections.reverseGeocodeLocation(devicePoint)
+                                }.getOrElse {
+                                    devicePoint.copy(label = devicePoint.coordinateLabel())
+                                }
+                            }
+                        }.getOrElse {
+                            devicePoint.copy(label = devicePoint.coordinateLabel())
+                        }
+                        pendingLocation = point
+                        center = point
+                        locationSetupStep = LocationSetupStep.CONFIRM
+                    }
+                }.onFailure { locationError ->
+                    locationSetupMessage = locationError.message
+                        ?: "No fue posible obtener la ubicación actual."
+                    locationSetupStep = LocationSetupStep.MANUAL
+                }
+            } finally {
+                if (requestId == locationRequestId) locationJob = null
             }
         }
     }
@@ -544,8 +786,10 @@ fun RoutesScreen(
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
+        val commitImmediately = commitDeviceLocationAfterPermission
+        commitDeviceLocationAfterPermission = false
         if (permissions.values.any { it }) {
-            locateDevice()
+            locateDevice(commitImmediately)
         } else {
             locationSetupMessage =
                 "No se concedió acceso a la ubicación. Puedes elegirla manualmente."
@@ -578,11 +822,46 @@ fun RoutesScreen(
     }
 
     val displayedLocation = pendingLocation ?: userLocation
+    val deviceHeading = rememberDeviceHeading(
+        isActive = isActive,
+        location = displayedLocation
+    )
+    val compassBearing = deviceHeading ?: cameraBearing
 
     Box(Modifier.fillMaxSize()) {
+        if (mapActivated) {
+            OpenStreetMap(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .mapPagerSwipeRegion(
+                        pagerSwipeEnabled = false,
+                        onPagerSwipeEnabledChange = onPagerSwipeEnabledChange
+                    ),
+                center = center,
+                userLocation = displayedLocation,
+                meetups = meetups.toList(),
+                selectedPoint = selectedPoint,
+                routePreview = routePreview,
+                isActive = isActive,
+                creationStep = creationStep,
+                styleDefinition = mapStyleMode.styleDefinition,
+                maximumZoom = mapStyleMode.maximumCameraZoom,
+                compassResetRequest = compassResetRequest,
+                onMapReady = {},
+                onPointSelected = { selectedPoint = it },
+                onMeetupSelected = ::openMeetup,
+                onBearingChanged = { cameraBearing = it },
+                onMapError = {
+                    error = "No fue posible cargar el mapa. Revisa tu conexión a internet."
+                }
+            )
+        }
+
         Column(
             modifier = Modifier
                 .align(Alignment.TopStart)
+                .fillMaxWidth()
+                .statusBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 8.dp)
                 .mapPagerSwipeRegion(
                     pagerSwipeEnabled = true,
@@ -591,133 +870,170 @@ fun RoutesScreen(
                 .zIndex(1f),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MapControlButton(
-                    icon = if (searchControlsExpanded) Icons.Outlined.Close else Icons.Outlined.Search,
-                    contentDescription = if (searchControlsExpanded) {
-                        "Cerrar búsqueda de juntas"
-                    } else {
-                        "Buscar juntas"
-                    },
-                    selected = searchControlsExpanded,
-                    enabled = creationStep == MeetupCreationStep.CLOSED,
-                    onClick = { searchControlsExpanded = !searchControlsExpanded }
-                )
-                Box {
-                    MapControlButton(
-                        icon = Icons.Outlined.Layers,
-                        contentDescription = "Capas del mapa: ${mapStyleMode.visibleLabel}",
-                        selected = mapStyleMenuExpanded,
-                        onClick = { mapStyleMenuExpanded = true }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    MapTopBar(
+                        mode = cyclingMode,
+                        bikeMenuExpanded = cyclingModeMenuExpanded,
+                        searchExpanded = searchControlsExpanded,
+                        enabled = creationStep == MeetupCreationStep.CLOSED,
+                        modifier = Modifier.fillMaxWidth(),
+                        onBikeMenuExpandedChange = { cyclingModeMenuExpanded = it },
+                        onModeSelected = ::selectCyclingMode,
+                        onSearchClick = { searchControlsExpanded = !searchControlsExpanded }
                     )
-                    DropdownMenu(
-                        expanded = mapStyleMenuExpanded,
-                        onDismissRequest = { mapStyleMenuExpanded = false },
-                        containerColor = AppSurfaceElevated.copy(alpha = 0.94f)
+
+                    if (
+                        creationStep == MeetupCreationStep.CLOSED &&
+                        routePreview == null &&
+                        !routeLoading
                     ) {
-                        MapStyleMode.entries.forEach { mode ->
-                            DropdownMenuItem(
-                                text = { Text(mode.visibleLabel) },
-                                leadingIcon = {
-                                    if (mode == mapStyleMode) {
-                                        Icon(Icons.Outlined.Check, contentDescription = null)
-                                    } else {
-                                        Icon(Icons.Outlined.Layers, contentDescription = null)
-                                    }
-                                },
-                                onClick = {
-                                    mapStyleMode = mode
-                                    mapStyleMenuExpanded = false
+                        MapPrimaryActions(
+                            modifier = Modifier.fillMaxWidth(),
+                            onCreateRoute = {
+                                if (userLocation == null) {
+                                    locationSetupMessage =
+                                        "Confirma tu ubicación antes de elegir el destino del trayecto."
+                                    locationSetupStep = LocationSetupStep.MANUAL
+                                } else {
+                                    searchControlsExpanded = false
+                                    routeNotice = null
+                                    routeDestinationPicker = true
                                 }
+                            },
+                            onCreateMeetup = {
+                                if (account == null) onOpenAccount()
+                                else {
+                                    creationError = null
+                                    creationStep = MeetupCreationStep.SELECT_LOCATION
+                                }
+                            }
+                        )
+                    }
+
+                    if (searchControlsExpanded) {
+                        SearchField(
+                            value = query,
+                            onValueChange = { query = it },
+                            placeholder = "Buscar junta",
+                            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                            trailingIcon = {
+                                IconButton(onClick = { userLocation?.let(::refresh) }) {
+                                    Icon(Icons.Outlined.Search, contentDescription = "Buscar")
+                                }
+                            },
+                            enabled = userLocation != null,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = AppSurfaceElevated.copy(alpha = 0.78f),
+                                unfocusedContainerColor = AppSurfaceElevated.copy(alpha = 0.72f),
+                                disabledContainerColor = AppSurfaceElevated.copy(alpha = 0.58f),
+                                focusedTextColor = AppTextPrimary,
+                                unfocusedTextColor = AppTextPrimary,
+                                focusedBorderColor = AppPrimaryBright.copy(alpha = 0.78f),
+                                unfocusedBorderColor = AppBorderSubtle,
+                                cursorColor = AppPrimaryBright
+                            ),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(
+                                onSearch = { userLocation?.let(::refresh) }
                             )
-                        }
+                        )
+
+                        CurrentLocationRow(
+                            location = displayedLocation,
+                            locating = locationSetupStep == LocationSetupStep.LOCATING ||
+                                locationSetupStep == LocationSetupStep.REQUESTING_PERMISSION,
+                            enabled = locationSetupStep != LocationSetupStep.LOCATING,
+                            onLocate = {
+                                val hasLocationPermission = ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.ACCESS_FINE_LOCATION
+                                ) == PackageManager.PERMISSION_GRANTED ||
+                                    ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.ACCESS_COARSE_LOCATION
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                if (hasLocationPermission) {
+                                    locateDevice()
+                                } else {
+                                    commitDeviceLocationAfterPermission = false
+                                    locationPermissionLauncher.launch(
+                                        arrayOf(
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                    )
+                                }
+                            },
+                            onClick = {
+                                locationSetupMessage = null
+                                locationSetupStep = LocationSetupStep.MANUAL
+                            }
+                        )
                     }
                 }
-            }
 
-            if (
-                creationStep == MeetupCreationStep.CLOSED &&
-                routePreview == null &&
-                !routeLoading
-            ) {
-                MapPrimaryActions(
-                    modifier = Modifier,
-                    onCreateRoute = {
-                        if (userLocation == null) {
-                            locationSetupMessage =
-                                "Confirma tu ubicación antes de elegir el destino del trayecto."
-                            locationSetupStep = LocationSetupStep.MANUAL
-                        } else {
-                            searchControlsExpanded = false
-                            routeNotice = null
-                            routeDestinationPicker = true
-                        }
-                    },
-                    onCreateMeetup = {
-                        if (account == null) onOpenAccount()
-                        else {
-                            creationError = null
-                            creationStep = MeetupCreationStep.SELECT_LOCATION
-                        }
-                    }
+                WeatherStatusPopover(
+                    state = weatherState,
+                    compact = true,
+                    modifier = Modifier
                 )
             }
+        }
 
-            if (searchControlsExpanded) {
-                SearchField(
-                    value = query,
-                    onValueChange = { query = it },
-                    placeholder = "Buscar junta",
-                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                    trailingIcon = {
-                        IconButton(onClick = { userLocation?.let(::refresh) }) {
-                            Icon(Icons.Outlined.Search, contentDescription = "Buscar")
-                        }
-                    },
-                    enabled = userLocation != null,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = AppSurfaceElevated.copy(alpha = 0.78f),
-                        unfocusedContainerColor = AppSurfaceElevated.copy(alpha = 0.72f),
-                        disabledContainerColor = AppSurfaceElevated.copy(alpha = 0.58f),
-                        focusedTextColor = AppTextPrimary,
-                        unfocusedTextColor = AppTextPrimary,
-                        focusedBorderColor = AppPrimaryBright.copy(alpha = 0.78f),
-                        unfocusedBorderColor = AppBorderSubtle,
-                        cursorColor = AppPrimaryBright
-                    ),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(
-                        onSearch = { userLocation?.let(::refresh) }
-                    )
-                )
-
-                CurrentLocationRow(
-                    location = displayedLocation,
-                    locating = locationSetupStep == LocationSetupStep.LOCATING ||
-                        locationSetupStep == LocationSetupStep.REQUESTING_PERMISSION,
-                    enabled = locationSetupStep != LocationSetupStep.LOCATING,
-                    onLocate = {
-                        val hasFineLocation = ContextCompat.checkSelfPermission(
+        Column(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(top = 76.dp, end = 12.dp)
+                .zIndex(1f),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            MapCompassControl(
+                bearing = compassBearing,
+                onClick = { compassResetRequest += 1 }
+            )
+            MapControlButton(
+                icon = Icons.Outlined.Layers,
+                contentDescription = "Capas del mapa: ${mapStyleMode.visibleLabel}",
+                selected = mapStyleMenuExpanded,
+                onClick = { mapStyleMenuExpanded = true }
+            )
+            MapControlButton(
+                icon = Icons.Outlined.MyLocation,
+                contentDescription = "Centrar en mi ubicación",
+                selected = false,
+                enabled = locationSetupStep != LocationSetupStep.LOCATING &&
+                    locationSetupStep != LocationSetupStep.REQUESTING_PERMISSION,
+                onClick = {
+                    val hasLocationPermission = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.ACCESS_FINE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED ||
+                        ContextCompat.checkSelfPermission(
                             context,
-                            Manifest.permission.ACCESS_FINE_LOCATION
+                            Manifest.permission.ACCESS_COARSE_LOCATION
                         ) == PackageManager.PERMISSION_GRANTED
-                        if (hasFineLocation) {
-                            locateDevice()
-                        } else {
-                            locationPermissionLauncher.launch(
-                                arrayOf(
-                                    Manifest.permission.ACCESS_FINE_LOCATION,
-                                    Manifest.permission.ACCESS_COARSE_LOCATION
-                                )
+                    if (hasLocationPermission) {
+                        locateDevice(commitImmediately = true)
+                    } else {
+                        commitDeviceLocationAfterPermission = true
+                        locationPermissionLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION
                             )
-                        }
-                    },
-                    onClick = {
-                        locationSetupMessage = null
-                        locationSetupStep = LocationSetupStep.MANUAL
+                        )
                     }
-                )
-            }
+                }
+            )
         }
 
         if (creationStep == MeetupCreationStep.SELECT_LOCATION) {
@@ -757,36 +1073,11 @@ fun RoutesScreen(
             }
         }
 
-        if (mapActivated) {
-            OpenStreetMap(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .mapPagerSwipeRegion(
-                        pagerSwipeEnabled = false,
-                        onPagerSwipeEnabledChange = onPagerSwipeEnabledChange
-                    ),
-                center = center,
-                userLocation = displayedLocation,
-                meetups = meetups.toList(),
-                selectedPoint = selectedPoint,
-                routePreview = routePreview,
-                isActive = isActive,
-                creationStep = creationStep,
-                styleDefinition = mapStyleMode.styleDefinition,
-                maximumZoom = mapStyleMode.maximumCameraZoom,
-                onMapReady = {},
-                onPointSelected = { selectedPoint = it },
-                onMeetupSelected = ::openMeetup,
-                onMapError = {
-                    error = "No fue posible cargar el mapa. Revisa tu conexión a internet."
-                }
-            )
-        }
-
         routePreview?.let { preview ->
             RoutePreviewPanel(
                 preview = preview,
                 destinationTitle = routeTitle,
+                cyclingMode = cyclingMode,
                 notice = routeNotice,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -809,6 +1100,7 @@ fun RoutesScreen(
 
         if (routeLoading) {
             RouteLoadingPanel(
+                cyclingMode = cyclingMode,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(AppDimens.Space4)
@@ -885,6 +1177,18 @@ fun RoutesScreen(
                 }
             )
         }
+
+        if (mapStyleMenuExpanded) {
+            MapLayersSheet(
+                selectedMode = mapStyleMode,
+                onDismiss = { mapStyleMenuExpanded = false },
+                onModeSelected = { mode ->
+                    mapStyleMode = mode
+                    mapStyleMenuExpanded = false
+                }
+            )
+        }
+
     }
 
     when (locationSetupStep) {
@@ -1018,9 +1322,11 @@ internal fun OpenStreetMap(
     creationStep: MeetupCreationStep,
     styleDefinition: String = OPEN_FREE_MAP_STYLE,
     maximumZoom: Double = STREET_MAX_CAMERA_ZOOM,
+    compassResetRequest: Int = 0,
     onMapReady: (MapLibreMap) -> Unit,
     onPointSelected: (GeoPoint) -> Unit,
     onMeetupSelected: (MeetupEvent) -> Unit,
+    onBearingChanged: (Double) -> Unit = {},
     onMapError: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -1032,6 +1338,7 @@ internal fun OpenStreetMap(
     val currentOnPointSelected = rememberUpdatedState(onPointSelected)
     val currentMeetups = rememberUpdatedState(meetups)
     val currentOnMeetupSelected = rememberUpdatedState(onMeetupSelected)
+    val currentOnBearingChanged = rememberUpdatedState(onBearingChanged)
     val currentOnMapError = rememberUpdatedState(onMapError)
     val selectedIcon = remember(context) { createSelectedPointIcon(context) }
     val userLocationIcon = remember(context) { createUserLocationIcon(context) }
@@ -1190,6 +1497,15 @@ internal fun OpenStreetMap(
                     lineOpacity(0.92f)
                 )
             )
+            style.addLayer(
+                CircleLayer(USER_DOT_LAYER_ID, USER_SOURCE_ID).withProperties(
+                    circleRadius(8f),
+                    circleColor(0xFF21E58B.toInt()),
+                    circleOpacity(0.96f),
+                    circleStrokeColor(0xFFFFFFFF.toInt()),
+                    circleStrokeWidth(3f)
+                )
+            )
             style.addLayer(symbolLayer(USER_LAYER_ID, USER_SOURCE_ID, USER_ICON_ID))
             style.addLayer(symbolLayer(MEETUP_LAYER_ID, MEETUP_SOURCE_ID, MEETUP_ICON_ID))
             style.addLayer(symbolLayer(SELECTED_LAYER_ID, SELECTED_SOURCE_ID, SELECTED_ICON_ID))
@@ -1205,6 +1521,36 @@ internal fun OpenStreetMap(
 
     LaunchedEffect(map, maximumZoom) {
         map?.setMaxZoomPreference(maximumZoom)
+    }
+
+    DisposableEffect(map) {
+        val readyMap = map ?: return@DisposableEffect onDispose { }
+        val onCameraMove = MapLibreMap.OnCameraMoveListener {
+            currentOnBearingChanged.value(readyMap.cameraPosition.bearing)
+        }
+        val onCameraIdle = MapLibreMap.OnCameraIdleListener {
+            currentOnBearingChanged.value(readyMap.cameraPosition.bearing)
+        }
+        currentOnBearingChanged.value(readyMap.cameraPosition.bearing)
+        readyMap.addOnCameraMoveListener(onCameraMove)
+        readyMap.addOnCameraIdleListener(onCameraIdle)
+        onDispose {
+            readyMap.removeOnCameraMoveListener(onCameraMove)
+            readyMap.removeOnCameraIdleListener(onCameraIdle)
+        }
+    }
+
+    LaunchedEffect(map, compassResetRequest) {
+        if (compassResetRequest == 0) return@LaunchedEffect
+        val readyMap = map ?: return@LaunchedEffect
+        val currentPosition = readyMap.cameraPosition
+        readyMap.animateCamera(
+            CameraUpdateFactory.newCameraPosition(
+                CameraPosition.Builder(currentPosition)
+                    .bearing(0.0)
+                    .build()
+            )
+        )
     }
 
     LaunchedEffect(map, center) {
@@ -1261,10 +1607,10 @@ internal fun OpenStreetMap(
     AndroidView(
         factory = { mapView },
         update = { view ->
-            val mapType = if (styleDefinition == SATELLITE_MAP_STYLE) {
-                "Mapa satelital"
-            } else {
-                "Mapa de calles"
+            val mapType = when (styleDefinition) {
+                SATELLITE_MAP_STYLE -> "Mapa satelital"
+                HYBRID_MAP_STYLE -> "Mapa híbrido: satélite y calles"
+                else -> "Mapa de calles"
             }
             view.contentDescription = when (meetups.size) {
                 0 -> "$mapType. No hay juntas cercanas visibles"
@@ -1345,6 +1691,595 @@ private fun routeFeatureCollection(preview: CyclingRoutePreview?): FeatureCollec
 private fun emptyFeatureCollection(): FeatureCollection =
     FeatureCollection.fromFeatures(emptyList<Feature>())
 
+private fun MapStyleMode.icon(): ImageVector = when (this) {
+    MapStyleMode.MAPA -> Icons.Outlined.Map
+    MapStyleMode.SATELITE -> Icons.Outlined.SatelliteAlt
+    MapStyleMode.HIBRIDO -> Icons.Outlined.Layers
+}
+
+private fun CyclingMode.icon(): ImageVector = when (this) {
+    CyclingMode.RUTA -> Icons.AutoMirrored.Outlined.DirectionsBike
+    CyclingMode.GRAVEL -> Icons.Outlined.Route
+    CyclingMode.MOUNTAIN_BIKE -> Icons.Outlined.Terrain
+}
+
+@Composable
+private fun MapTopBar(
+    mode: CyclingMode,
+    bikeMenuExpanded: Boolean,
+    searchExpanded: Boolean,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onBikeMenuExpandedChange: (Boolean) -> Unit,
+    onModeSelected: (CyclingMode) -> Unit,
+    onSearchClick: () -> Unit
+) {
+    Surface(
+        modifier = modifier
+            .heightIn(min = 60.dp),
+        shape = RoundedCornerShape(20.dp),
+        color = AppBackgroundElevated.copy(alpha = 0.93f),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            AppBorderSubtle.copy(alpha = 0.92f)
+        ),
+        shadowElevation = 8.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            BikeTypeSelector(
+                mode = mode,
+                expanded = bikeMenuExpanded,
+                enabled = enabled,
+                onExpandedChange = onBikeMenuExpandedChange,
+                onModeSelected = onModeSelected
+            )
+            Box(
+                modifier = Modifier
+                    .size(width = 1.dp, height = 30.dp)
+                    .background(AppBorderSubtle.copy(alpha = 0.9f))
+            )
+            Surface(
+                onClick = onSearchClick,
+                enabled = enabled,
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp),
+                color = Color.Transparent,
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(9.dp)
+                ) {
+                    Icon(
+                        imageVector = if (searchExpanded) Icons.Outlined.Close else Icons.Outlined.Search,
+                        contentDescription = null,
+                        tint = if (enabled) AppTextPrimary else AppTextPrimary.copy(alpha = 0.42f),
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Text(
+                        text = if (searchExpanded) "Cerrar búsqueda" else "Buscar juntas o lugares",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (enabled) {
+                            AppTextPrimary.copy(alpha = 0.90f)
+                        } else {
+                            AppTextPrimary.copy(alpha = 0.42f)
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BikeTypeSelector(
+    mode: CyclingMode,
+    expanded: Boolean,
+    enabled: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onModeSelected: (CyclingMode) -> Unit
+) {
+    BoxWithConstraints {
+        val buttonLabel = if (maxWidth < 164.dp) mode.compactLabel else mode.visibleLabel
+        Surface(
+            onClick = { onExpandedChange(!expanded) },
+            enabled = enabled,
+            modifier = Modifier
+                .widthIn(min = 142.dp, max = 184.dp)
+                .heightIn(min = 48.dp)
+                .semantics {
+                    contentDescription = "Seleccionar tipo de bicicleta: ${mode.visibleLabel}"
+                },
+            shape = RoundedCornerShape(16.dp),
+            color = if (expanded) {
+                AppPrimary.copy(alpha = 0.24f)
+            } else {
+                AppPrimary.copy(alpha = 0.14f)
+            },
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                if (expanded) AppPrimaryBright.copy(alpha = 0.78f) else AppPrimary.copy(alpha = 0.48f)
+            )
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = mode.icon(),
+                    contentDescription = null,
+                    tint = if (enabled) AppPrimaryBright else AppPrimaryBright.copy(alpha = 0.42f),
+                    modifier = Modifier.size(24.dp)
+                )
+                Text(
+                    text = buttonLabel,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = if (enabled) AppTextPrimary else AppTextPrimary.copy(alpha = 0.42f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.Outlined.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = if (enabled) AppTextPrimary else AppTextPrimary.copy(alpha = 0.42f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { onExpandedChange(false) },
+            modifier = Modifier.widthIn(min = 250.dp)
+        ) {
+            Text(
+                text = "Tipo de bicicleta",
+                style = MaterialTheme.typography.labelMedium,
+                color = AppPrimaryBright,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+            )
+            CyclingMode.entries.forEach { option ->
+                val selected = option == mode
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = option.visibleLabel,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                        )
+                    },
+                    onClick = { onModeSelected(option) },
+                    modifier = Modifier.semantics {
+                        contentDescription = option.visibleLabel
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = option.icon(),
+                            contentDescription = null,
+                            tint = if (selected) AppPrimaryBright else AppTextPrimary
+                        )
+                    },
+                    trailingIcon = if (selected) {
+                        {
+                            Icon(
+                                imageVector = Icons.Outlined.Check,
+                                contentDescription = "Seleccionado",
+                                tint = AppPrimaryBright
+                            )
+                        }
+                    } else {
+                        null
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MapCompassControl(
+    bearing: Double,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val normalizedBearing = normalizeBearing(bearing).roundToInt()
+    val cardinalDirection = compassCardinalDirection(bearing)
+    Surface(
+        onClick = onClick,
+        modifier = modifier
+            .size(48.dp)
+            .semantics {
+                contentDescription =
+                    "Brújula: rumbo $cardinalDirection, $normalizedBearing grados. " +
+                        "Orientar mapa al norte"
+            },
+        shape = CircleShape,
+        color = Color(0xE6080C0A),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            AppTextPrimary.copy(alpha = 0.24f)
+        ),
+        shadowElevation = 8.dp
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = Icons.Outlined.Explore,
+                contentDescription = null,
+                tint = AppTextPrimary.copy(alpha = 0.96f),
+                modifier = Modifier
+                    .size(30.dp)
+                    .graphicsLayer { rotationZ = -normalizeBearing(bearing).toFloat() }
+            )
+            Text(
+                text = cardinalDirection,
+                style = MaterialTheme.typography.labelSmall,
+                color = AppAccentOrange,
+                fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
+            Text(
+                text = "${normalizedBearing}°",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 7.sp),
+                color = AppTextPrimary.copy(alpha = 0.82f),
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
+    }
+}
+
+internal fun normalizeBearing(bearing: Double): Double =
+    if (bearing.isFinite()) ((bearing % 360.0) + 360.0) % 360.0 else 0.0
+
+internal fun compassCardinalDirection(bearing: Double): String {
+    val directions = arrayOf("N", "NE", "E", "SE", "S", "SO", "O", "NO")
+    val index = ((normalizeBearing(bearing) + 22.5) / 45.0)
+        .toInt()
+        .mod(directions.size)
+    return directions[index]
+}
+
+internal fun smoothBearing(previous: Double, next: Double, amount: Double): Double {
+    val factor = amount.coerceIn(0.0, 1.0)
+    val shortestDelta = ((next - previous + 540.0) % 360.0) - 180.0
+    return normalizeBearing(previous + shortestDelta * factor)
+}
+
+@Composable
+private fun rememberDeviceHeading(
+    isActive: Boolean,
+    location: GeoPoint?
+): Double? {
+    val context = LocalContext.current
+    val headingState = remember { mutableStateOf<Double?>(null) }
+    val latitude = location?.latitude
+    val longitude = location?.longitude
+
+    DisposableEffect(context, isActive, latitude, longitude) {
+        headingState.value = null
+        if (!isActive) return@DisposableEffect onDispose { }
+
+        val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as?
+            SensorManager ?: return@DisposableEffect onDispose { }
+        val rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        val magneticField = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+        if (rotationSensor == null && (accelerometer == null || magneticField == null)) {
+            return@DisposableEffect onDispose { }
+        }
+
+        val rotationMatrix = FloatArray(9)
+        val adjustedRotationMatrix = FloatArray(9)
+        val orientation = FloatArray(3)
+        var lastHeading = 0.0
+        var hasHeading = false
+        var lastPublishedAtNanos = 0L
+        var gravityValues: FloatArray? = null
+        var magneticValues: FloatArray? = null
+        val declination = if (
+            latitude != null && longitude != null &&
+            latitude in -90.0..90.0 && longitude in -180.0..180.0
+        ) {
+            GeomagneticField(
+                latitude.toFloat(),
+                longitude.toFloat(),
+                0f,
+                System.currentTimeMillis()
+            ).declination.toDouble()
+        } else {
+            0.0
+        }
+
+        fun publishHeading(matrix: FloatArray) {
+            val nowNanos = SystemClock.elapsedRealtimeNanos()
+            if (hasHeading && nowNanos - lastPublishedAtNanos < 30_000_000L) return
+            lastPublishedAtNanos = nowNanos
+            @Suppress("DEPRECATION")
+            val displayRotation = (context.getSystemService(Context.WINDOW_SERVICE) as?
+                WindowManager)?.defaultDisplay?.rotation ?: Surface.ROTATION_0
+            val remapped = when (displayRotation) {
+                Surface.ROTATION_90 -> SensorManager.remapCoordinateSystem(
+                    matrix,
+                    SensorManager.AXIS_Y,
+                    SensorManager.AXIS_MINUS_X,
+                    adjustedRotationMatrix
+                )
+                Surface.ROTATION_180 -> SensorManager.remapCoordinateSystem(
+                    matrix,
+                    SensorManager.AXIS_MINUS_X,
+                    SensorManager.AXIS_MINUS_Y,
+                    adjustedRotationMatrix
+                )
+                Surface.ROTATION_270 -> SensorManager.remapCoordinateSystem(
+                    matrix,
+                    SensorManager.AXIS_MINUS_Y,
+                    SensorManager.AXIS_X,
+                    adjustedRotationMatrix
+                )
+                else -> {
+                    System.arraycopy(matrix, 0, adjustedRotationMatrix, 0, matrix.size)
+                    true
+                }
+            }
+            if (!remapped) return
+
+            SensorManager.getOrientation(adjustedRotationMatrix, orientation)
+            val magneticHeading = Math.toDegrees(orientation[0].toDouble())
+            val trueHeading = normalizeBearing(magneticHeading + declination)
+            lastHeading = if (hasHeading) {
+                smoothBearing(lastHeading, trueHeading, amount = 0.18)
+            } else {
+                trueHeading
+            }
+            hasHeading = true
+            headingState.value = lastHeading
+        }
+
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+                if (event.sensor.type == Sensor.TYPE_ROTATION_VECTOR) {
+                    SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
+                    publishHeading(rotationMatrix)
+                    return
+                }
+
+                if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
+                    gravityValues = event.values.clone()
+                } else if (event.sensor.type == Sensor.TYPE_MAGNETIC_FIELD) {
+                    magneticValues = event.values.clone()
+                }
+                val gravity = gravityValues
+                val magnetic = magneticValues
+                if (gravity != null && magnetic != null && SensorManager.getRotationMatrix(
+                        rotationMatrix,
+                        null,
+                        gravity,
+                        magnetic
+                    )
+                ) {
+                    publishHeading(rotationMatrix)
+                }
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        }
+
+        if (rotationSensor != null) {
+            sensorManager.registerListener(
+                listener,
+                rotationSensor,
+                SensorManager.SENSOR_DELAY_GAME
+            )
+        } else {
+            sensorManager.registerListener(
+                listener,
+                accelerometer,
+                SensorManager.SENSOR_DELAY_GAME
+            )
+            sensorManager.registerListener(
+                listener,
+                magneticField,
+                SensorManager.SENSOR_DELAY_GAME
+            )
+        }
+
+        onDispose {
+            sensorManager.unregisterListener(listener)
+            headingState.value = null
+        }
+    }
+
+    return headingState.value
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MapLayersSheet(
+    selectedMode: MapStyleMode,
+    onDismiss: () -> Unit,
+    onModeSelected: (MapStyleMode) -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = AppBackgroundElevated,
+        scrimColor = Color.Black.copy(alpha = 0.74f),
+        dragHandle = {
+            Surface(
+                modifier = Modifier.padding(top = 6.dp),
+                shape = RoundedCornerShape(50),
+                color = AppTextPrimary.copy(alpha = 0.28f)
+            ) {
+                Box(Modifier.size(width = 42.dp, height = 4.dp))
+            }
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .navigationBarsPadding()
+                .verticalScroll(rememberScrollState())
+                .padding(start = 20.dp, end = 20.dp, bottom = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "CAPAS DEL MAPA",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AppPrimaryBright,
+                    letterSpacing = 1.4.sp
+                )
+                Text(
+                    text = "Elige cómo quieres ver la aventura",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Text(
+                    text = "Explora con el detalle que necesitas en cada salida.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                MapStyleMode.entries.forEach { mode ->
+                    MapLayerOption(
+                        mode = mode,
+                        selected = mode == selectedMode,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onModeSelected(mode) }
+                    )
+                }
+            }
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = AppPrimary.copy(alpha = 0.12f),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    AppPrimaryBright.copy(alpha = 0.22f)
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = selectedMode.icon(),
+                        contentDescription = null,
+                        tint = AppPrimaryBright,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Text(
+                        text = selectedMode.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppTextPrimary.copy(alpha = 0.88f)
+                    )
+                }
+            }
+            Text(
+                text = "Híbrido conserva la imagen satelital y suma calles, nombres y senderos ciclistas sobre el mismo mapa.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun MapLayerOption(
+    mode: MapStyleMode,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier.height(148.dp),
+        shape = RoundedCornerShape(18.dp),
+        color = if (selected) {
+            AppPrimary.copy(alpha = 0.18f)
+        } else {
+            AppSurfaceElevated.copy(alpha = 0.72f)
+        },
+        border = androidx.compose.foundation.BorderStroke(
+            width = if (selected) 2.dp else 1.dp,
+            color = if (selected) AppPrimaryBright else AppBorderSubtle
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(9.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(78.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    shape = RoundedCornerShape(13.dp),
+                    color = when (mode) {
+                        MapStyleMode.MAPA -> Color(0xFF163D35)
+                        MapStyleMode.SATELITE -> Color(0xFF1F3928)
+                        MapStyleMode.HIBRIDO -> Color(0xFF164B39)
+                    }
+                ) {}
+                Icon(
+                    imageVector = mode.icon(),
+                    contentDescription = null,
+                    tint = when (mode) {
+                        MapStyleMode.MAPA -> AppAccentBlue
+                        MapStyleMode.SATELITE -> AppAccentAmber
+                        MapStyleMode.HIBRIDO -> AppPrimaryBright
+                    },
+                    modifier = Modifier.size(34.dp)
+                )
+                if (selected) {
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(5.dp),
+                        shape = CircleShape,
+                        color = AppPrimaryBright
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Check,
+                            contentDescription = null,
+                            tint = AppBackground,
+                            modifier = Modifier.padding(3.dp).size(13.dp)
+                        )
+                    }
+                }
+            }
+            Text(
+                text = mode.visibleLabel,
+                style = MaterialTheme.typography.labelLarge,
+                color = if (selected) AppPrimaryBright else AppTextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = when (mode) {
+                    MapStyleMode.MAPA -> "Calles"
+                    MapStyleMode.SATELITE -> "Terreno"
+                    MapStyleMode.HIBRIDO -> "Calles + foto"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
+    }
+}
+
 @Composable
 internal fun MapPrimaryActions(
     modifier: Modifier = Modifier,
@@ -1353,8 +2288,8 @@ internal fun MapPrimaryActions(
 ) {
     Surface(
         modifier = modifier
-            .padding(horizontal = AppDimens.Space2)
-            .widthIn(min = 224.dp, max = 248.dp),
+            .fillMaxWidth()
+            .widthIn(max = 280.dp),
         shape = RoundedCornerShape(24.dp),
         color = AppBackgroundElevated.copy(alpha = 0.70f),
         border = androidx.compose.foundation.BorderStroke(
@@ -1429,6 +2364,7 @@ private fun MapPrimaryAction(
 
 @Composable
 private fun RouteLoadingPanel(
+    cyclingMode: CyclingMode,
     modifier: Modifier = Modifier,
     onCancel: () -> Unit
 ) {
@@ -1452,7 +2388,7 @@ private fun RouteLoadingPanel(
             Column(Modifier.weight(1f)) {
                 Text("Calculando trayecto", fontWeight = FontWeight.Bold)
                 Text(
-                    "Buscando un camino adecuado para bicicleta…",
+                    "Buscando un camino para ${cyclingMode.visibleLabel.lowercase()}…",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1468,6 +2404,7 @@ private fun RouteLoadingPanel(
 private fun RoutePreviewPanel(
     preview: CyclingRoutePreview,
     destinationTitle: String,
+    cyclingMode: CyclingMode,
     notice: String?,
     modifier: Modifier = Modifier,
     onOpenNavigation: () -> Unit,
@@ -1510,10 +2447,10 @@ private fun RoutePreviewPanel(
                     )
                     Text(
                         text = if (preview.isDirectEstimate) {
-                            "Línea directa de respaldo · " +
+                            "${cyclingMode.visibleLabel} · línea directa de respaldo · " +
                                 "${preview.averageSpeedKmh?.roundToInt() ?: 15} km/h"
                         } else {
-                            "Ruta ciclista por calles · OpenStreetMap"
+                            "${cyclingMode.visibleLabel} · ruta por calles · OpenStreetMap"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

@@ -10,6 +10,7 @@ object LocalDataStore {
     private const val PREFS = "appbike_local_data"
     private const val LOCATION = "selected_location"
     private const val MARKETPLACE_LOCATION = "marketplace_location"
+    private const val MAP_CYCLING_MODE = "map_cycling_mode"
     private const val LOCATION_HISTORY = "location_history"
     private const val LOCATION_HISTORY_LIMIT = 8
     private const val PROFILE_BIO = "profile_bio"
@@ -39,6 +40,13 @@ object LocalDataStore {
 
     fun rememberRecentLocation(context: Context, point: GeoPoint) {
         rememberLocation(context, point, loadLocationHistory(context))
+    }
+
+    fun loadMapCyclingMode(context: Context): String? =
+        prefs(context).getString(MAP_CYCLING_MODE, null)
+
+    fun saveMapCyclingMode(context: Context, mode: String) {
+        prefs(context).edit { putString(MAP_CYCLING_MODE, mode) }
     }
 
     fun loadProfileBio(context: Context, userId: String): String =

@@ -1,5 +1,140 @@
 # Registro de cambios de CodexChats
 
+## 2026-08-30 - Ubicación actual y brújula por sensores
+
+Objetivo:
+
+- Corregir el botón para encontrar la posición actual y hacer que la brújula
+  reconozca el giro físico del teléfono hacia N, E, S y O.
+
+Cambios:
+
+- `Centrar en mi ubicación` ahora solicita una lectura nueva con el permiso
+  disponible, cancela solicitudes anteriores, fija el punto inmediatamente y lo
+  persiste; ya no depende de que exista una ubicación guardada previamente.
+- El marcador de usuario combina el icono verde existente con un `CircleLayer`
+  verde de borde blanco para permanecer visible sobre Mapa, Satélite e Híbrido.
+- La brújula usa `TYPE_ROTATION_VECTOR`, con respaldo de acelerómetro y campo
+  magnético, compensación de declinación magnética, corrección por rotación de
+  pantalla y suavizado de rumbo. Ahora muestra el punto cardinal actual y los
+  grados; tocarla sigue orientando la cámara al norte.
+- Se agregaron pruebas unitarias para cardinales, normalización y suavizado del
+  rumbo, y se actualizaron `AGENTS.md`, `docs/MAP_MARKETPLACE_CHAT.md` y el
+  estado de continuidad.
+
+Pruebas:
+
+- `:app:testDebugUnitTest`, `:app:assembleDebug`,
+  `:app:assembleDebugAndroidTest` y `:app:lintDebug`: correctos.
+- `git diff --check`: correcto; el proyecto no tiene formatter configurado ni
+  binarios locales `ktlint`, `ktfmt` o `detekt`.
+- El APK final se instaló en el Samsung SM-A235M (`R58T9039QBN`) y
+  `MainActivity` fue lanzada sin crash reportado. La comprobación visual del
+  nuevo comportamiento queda pendiente de que el dispositivo esté desbloqueado.
+
+Pendientes:
+
+- Girar físicamente el teléfono y pulsar `Centrar en mi ubicación` durante QA
+  manual después de desbloquear el Samsung, para confirmar sensores y teselas en
+  red real.
+
+Siguiente paso:
+
+- Desbloquear el dispositivo y validar que el punto se vea después de una
+  lectura nueva y que el indicador cambie a E, S y O al rotarlo.
+
+## 2026-08-30 - Layout final del mapa
+
+Objetivo:
+
+- Alinear la pantalla Mapa con la estructura final entregada: mapa como base,
+  fila superior izquierda de bicicleta/búsqueda, clima arriba a la derecha,
+  Trayecto/Junta en segunda fila y controles derechos bajo el clima.
+
+Cambios:
+
+- `RoutesScreen` recibe el mismo `WeatherHeaderState` que ya calcula la raíz y
+  muestra el clima mediante `WeatherStatusPopover` dentro del overlay del mapa.
+- Se extrajo el popover de pronóstico a `HeaderStatusComponents.kt` para
+  conservar la interacción de seis días tanto en cabecera como en Mapa.
+- `MapView` se compone primero en el `Box`, ocupando el área central; los
+  controles se dibujan encima respetando `statusBarsPadding` y márgenes de 12 dp.
+- La barra izquierda y la fila Trayecto/Junta comparten ancho responsive; el
+  selector puede mostrar `Ruta` o `MTB` en espacios angostos y conserva nombres
+  completos dentro del menú.
+- En `ROUTES` la cabecera global no crea una franja separada; la barra inferior
+  y la navegación mantienen sus contratos actuales.
+
+Pruebas:
+
+- `:app:compileDebugKotlin` pasó después de resolver la visibilidad interna de
+  `RoutesScreen`.
+- `:app:testDebugUnitTest`, `:app:assembleDebug`,
+  `:app:assembleDebugAndroidTest` y `:app:lintDebug` pasaron con el layout
+  final.
+- El APK final se instaló en `R58T9039QBN`, `MainActivity` quedó enfocada y no
+  hay `FATAL EXCEPTION` ni `ANR` recientes.
+- La captura real en el Samsung confirmó la composición vertical final: mapa
+  bajo los controles y hasta la barra inferior, sin cabecera separada en Mapa.
+- Se abrió el selector físico y se comprobaron las tres opciones completas,
+  incluida la actualización visual al elegir `Mountain Bike` y la restauración
+  de `Bicicleta de ruta`.
+- Se abrió la hoja de capas y se comprobaron `Mapa`, `Satélite` e `Híbrido`; la
+  sesión terminó con `Mapa` como capa base.
+
+Pendientes:
+
+- El proyecto no tiene tarea ni binario formatter (`ktlint`, `ktfmt` o `detekt`);
+  `git diff --check` no encontró errores de whitespace.
+
+Siguiente paso:
+
+- Probar manualmente una búsqueda, el cálculo de un Trayecto y el flujo de
+  creación de una Junta con una cuenta de prueba.
+
+## 2026-08-30 - Barra de mapa y selector de bicicleta
+
+Objetivo:
+
+- Ajustar la pantalla de Mapa a la referencia visual entregada, conservando la
+  arquitectura MapLibre, las capas existentes y los flujos reales de trayectos
+  y juntas.
+
+Cambios:
+
+- Se reemplazó el panel grande de perfil por una barra superior compacta con
+  selector anclado y búsqueda.
+- El selector ofrece exactamente `Bicicleta de ruta`, `Gravel` y `Mountain Bike`,
+  con selección persistente en `LocalDataStore`, estado seleccionado y etiquetas
+  de accesibilidad.
+- Capas, brújula y centrar ubicación quedaron agrupados en un riel lateral.
+  No se agregó un control 3D sin implementación.
+- La brújula ahora usa `OnCameraMoveListener` y `OnCameraIdleListener` de
+  MapLibre para reflejar el rumbo real y conserva el reinicio animado al norte.
+- Se confirmó que no existe ni se muestra porcentaje de asfalto, badge ni
+  cálculo reservado para ese indicador.
+- Se actualizaron `AGENTS.md`, `docs/MAP_MARKETPLACE_CHAT.md` y el estado de
+  continuidad para reflejar el contrato visual vigente.
+
+Pruebas:
+
+- `:app:testDebugUnitTest`
+- `:app:assembleDebug`
+- `:app:assembleDebugAndroidTest`
+- `:app:lintDebug`
+- APK instalado y `MainActivity` abierta en Samsung SM-A235M,
+  serial `R58T9039QBN`; proceso activo y sin `FATAL EXCEPTION` reciente.
+
+Pendientes:
+
+- Verificar manualmente en el dispositivo los tres perfiles, la apertura de
+  capas, el centrado y el giro con MapLibre cuando haya una sesión de QA visual.
+
+Siguiente paso:
+
+- Probar el mapa en el dispositivo y ajustar únicamente el espaciado si el riel
+  lateral o el texto del selector se perciben apretados en otra densidad.
+
 ## 2026-08-11 - Revalidacion publica de dependencias backend
 
 Objetivo:
@@ -2621,3 +2756,76 @@ Siguiente paso:
 
 - Recorrer en el teléfono el flujo completo de elegir Trayecto y crear una
   Junta para comprobar el estado activo y sus diálogos.
+
+## 2026-08-29 - Capas híbridas, brújula y perfiles de rodada
+
+Objetivo:
+
+- Añadir una tercera capa Híbrido inspirada en las referencias entregadas,
+  incorporar una brújula precisa y ofrecer perfiles de Ciclista, Bicicleta de
+  montaña y Bicicleta de gravel con una presentación más memorable.
+
+Cambios:
+
+- `MapScreen.kt` añade el estilo Híbrido sobre el mismo `MapView`, combinando
+  World Imagery/etiquetas de Esri con calles, senderos y nombres vectoriales de
+  OpenFreeMap. La cámara conserva el límite seguro de zoom 17.
+- La hoja de capas reemplaza el menú compacto por una selección visual de tres
+  modos, con descripciones y estado activo.
+- Se añadió `MapCompassControl`, sincronizado con el rumbo de la cámara y con
+  acción para recuperar el norte sin mover la ubicación guardada.
+- `CyclingMode` y la hoja `Tu forma de rodar` exponen los tres perfiles y
+  `LocalDataStore` conserva la elección en el dispositivo. El perfil aparece en
+  la cabecera del mapa y el panel del trayecto; el fallback directo ajusta su
+  velocidad estimada.
+- Se actualizaron pruebas, `AGENTS.md`, `docs/MAP_MARKETPLACE_CHAT.md` y este
+  estado operativo.
+
+Pruebas:
+
+- `:app:compileDebugKotlin`: correcto.
+- `:app:testDebugUnitTest`: correcto.
+- `:app:assembleDebug`, `:app:assembleDebugAndroidTest` y `:app:lintDebug`:
+  correctos; lint conserva solo avisos preexistentes de versiones, launcher y
+  APIs KTX.
+- El JSON del estilo Híbrido se validó con el parser JSON de PowerShell.
+- `adb devices`: no hay teléfono ni emulador conectado; no fue posible abrir el
+  mapa, probar capas/rumbo ni ejecutar `:app:connectedDebugAndroidTest`.
+
+Pendientes:
+
+- Validar visualmente Híbrido con teselas de Esri/OpenFreeMap y comprobar el
+  gesto de rotación y el retorno al norte en un AVD o teléfono con red.
+
+Siguiente paso:
+
+- Instalar el APK debug en un dispositivo disponible y recorrer la hoja de capas,
+  la brújula y los tres perfiles antes de probar un trayecto real.
+
+## 2026-08-29 - Instalación en dispositivo físico
+
+Objetivo:
+
+- Ejecutar la versión actual de APPbike en el dispositivo Android conectado.
+
+Cambios:
+
+- No se modificó el código; se utilizó el APK debug generado por la entrega de
+  capas híbridas, brújula y perfiles de rodada.
+- Se instaló el APK sobre el Samsung SM-A235M (`R58T9039QBN`) y se abrió
+  `com.example.appbike/.MainActivity`.
+
+Pruebas:
+
+- `:app:assembleDebug`: correcto.
+- Instalación ADB: correcta.
+- La actividad quedó enfocada y el proceso está activo.
+- No se detectó un crash reciente de `AndroidRuntime`.
+
+Pendientes:
+
+- Recorrido manual de Híbrido, brújula y perfiles en la pantalla física.
+
+Siguiente paso:
+
+- Validar visualmente el mapa y sus controles en el dispositivo ya abierto.

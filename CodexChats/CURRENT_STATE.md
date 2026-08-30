@@ -1,6 +1,6 @@
 # Estado actual de APPbike
 
-Actualizado: 2026-08-28.
+Actualizado: 2026-08-29.
 
 ## Aplicación
 
@@ -71,6 +71,8 @@ Actualizado: 2026-08-28.
   nieve, tormenta y granizo. Actualiza cada 15 minutos y acredita de forma
   visible a Open-Meteo. Al tocarlo abre dentro de la cabecera un panel
   desplegable animado con el pronostico de seis dias; no abre paginas externas.
+  `ROUTES` reutiliza el mismo `WeatherStatusPopover` dentro del overlay del mapa
+  cuando la cabecera global no ocupa espacio.
 - Cuenta conserva el icono anterior `PersonOutline`, su indicador verde de
   sesion, un objetivo tactil de 48 dp y descripcion accesible. El clima mantiene
   intacto su espacio contiguo.
@@ -133,11 +135,29 @@ Actualizado: 2026-08-28.
   marcador azul, el detalle remoto y la fotografia real.
 - Crear una junta o contactar al organizador sin sesion abre Cuenta.
 
-- MapLibre OpenGL con marcador fijo para la ubicación elegida, boton circular de
-  capas `Mapa`/`Satélite`, cambio de estilo sobre el mismo `MapView`, logo textual
-  oculto y atribucion informativa conservada. La lupa despliega buscador y
-  ubicacion semitransparentes; la camara satelital se detiene en zoom 17 para no
-  entrar a teselas grises que Esri devuelve localmente en zoom 18/19.
+- MapLibre OpenGL con marcador visible para la ubicación elegida, botón circular de
+  capas `Mapa`/`Satélite`/`Híbrido`, cambio de estilo sobre el mismo `MapView`,
+  logo textual oculto y atribucion informativa conservada. Híbrido combina
+  World Imagery de Esri con calles, senderos ciclistas y nombres vectoriales de
+  OpenFreeMap. La lupa despliega buscador y ubicacion semitransparentes; la
+  camara satelital e híbrida se detiene en zoom 17 para no entrar a teselas
+  grises que Esri devuelve localmente en zoom 18/19.
+- La brújula propia lee el sensor de rotación del dispositivo, usa acelerómetro
+  y campo magnético como respaldo, corrige declinación y suaviza el rumbo para
+  reconocer puntos cardinales. Al tocarla vuelve la cámara al norte. La barra
+  superior compacta ofrece `Bicicleta de ruta`, `Gravel` y
+  `Mountain Bike`; el perfil queda persistido localmente, aparece en el panel del
+  trayecto y adapta el respaldo directo de velocidad. Capas y centrar ubicación
+  están en el riel lateral; no se muestra porcentaje de asfalto ni un control 3D
+  no implementado.
+- En Mapa, `MapView` ocupa la base del contenido central entre las áreas seguras.
+  La fila superior izquierda combina selector y búsqueda, el clima queda a la
+  derecha, `Trayecto`/`Junta` ocupan la segunda fila del bloque izquierdo y el
+  riel de brújula/capas/ubicación queda debajo del clima. La barra global no
+  agrega una franja separada en este destino; la navegación inferior permanece.
+- `Centrar en mi ubicación` pide una lectura actual con el permiso disponible,
+  publica el punto inmediatamente y lo persiste; el mapa usa un punto circular
+  verde además del icono para mantenerlo visible sobre cualquier estilo.
 - Mapa es el destino central. Usa TextureView dentro del pager, se inicializa al
   primer ingreso y baja a 4 FPS al quedar inactivo.
 - Tocar una Junta abre un bottom sheet. Con ubicacion confirmada muestra distancia
@@ -154,8 +174,9 @@ Actualizado: 2026-08-28.
 - Historial de hasta ocho ubicaciones.
 - Ubicación de Juntas independiente de Marketplace.
 - Juntas activas con coordenadas; contenido propio se administra en el perfil.
-- `Trayecto`/`Junta` se muestran como selector segmentado compacto en la esquina
-  superior, con botones equilibrados, borde sutil y transparencia sobre el mapa.
+- `Trayecto`/`Junta` se muestran como selector segmentado compacto debajo de la
+  fila de selector/búsqueda, con botones equilibrados, borde sutil y transparencia
+  sobre el mapa.
 - `PremiumScreenBackground` incorpora `appbike_solar_halo_background`, una
   textura raster abstracta de halo ámbar y atmósfera verde-grafito, con contraste
   controlado para no competir con el contenido.

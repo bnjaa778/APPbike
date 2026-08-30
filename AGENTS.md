@@ -4,7 +4,7 @@ Este archivo es la entrada principal para trabajar en APPbike. Usalo como
 router: antes de editar, identifica el tipo de tarea, abre primero los archivos
 indicados y conserva los contratos documentados aqui.
 
-Ultima revision del proyecto: 2026-08-28.
+Ultima revision del proyecto: 2026-08-29.
 
 ## Regla de oro
 
@@ -96,15 +96,18 @@ Ultima revision del proyecto: 2026-08-28.
 - La cabecera muestra el emblema monocromo entregado por el usuario en
   `appbike_brand_icon` y el clima local; no contiene un acceso duplicado a
   Perfil y conserva prioridad de dibujo sobre los fondos de las pantallas hijas.
-  Debe permanecer visible en los cinco destinos principales.
+  Se conserva en los destinos principales no cartográficos; `ROUTES` usa el
+  mapa como capa base y mueve selector, búsqueda y clima a overlays flotantes
+  para no crear una franja superior que reduzca el área útil del mapa.
 - El clima usa la posicion actual del dispositivo mientras la actividad esta
   iniciada. Se actualiza cada 15 minutos, reintenta un fallo al minuto y espera
   el permiso de ubicacion sin iniciar solicitudes de red desde Compose.
 - `WeatherStatusChip` muestra temperatura, estado e iconografia propia para sol,
   noche, nubes, niebla, lluvia, nieve, tormenta y granizo. El estado actual es
-  informativo y no abre enlaces externos: al tocarlo abre un panel desplegable
-  animado dentro de la cabecera con el pronostico de seis dias. La atribucion
-  visible `Open-Meteo` no debe retirarse.
+  informativo y no abre enlaces externos: al tocarlo, `WeatherStatusPopover`
+  abre un panel desplegable animado con el pronostico de seis dias. La misma
+  interacción se reutiliza en la cabecera global y en el overlay del mapa. La
+  atribucion visible `Open-Meteo` no debe retirarse.
 - La barra inferior solo debe contener:
   - `AppScreen.HOME` como "Inicio"
   - `AppScreen.MARKETPLACE`
@@ -436,9 +439,20 @@ Estado actual:
 - El `MapView` del pager se crea con `MapLibreMapOptions.textureMode(true)`, se
   activa recien al primer ingreso a Mapa y baja su FPS cuando la pestaña queda
   inactiva. No volver a `SurfaceView` dentro del pager.
-- El boton circular de capas abre un menu compacto con `Mapa`, usando Liberty de
-  OpenFreeMap, y `Satélite`, con World Imagery mas etiquetas de referencia de
-  Esri. Junto a el solo queda visible inicialmente el icono de busqueda.
+- El boton circular de capas abre una hoja visual con `Mapa`, usando Liberty de
+  OpenFreeMap, `Satélite`, con World Imagery mas etiquetas de referencia de
+  Esri, y `Híbrido`, que combina la imagen de Esri con calles, senderos y
+  nombres vectoriales de OpenFreeMap. La barra superior compacta combina el
+  selector de bicicleta con la búsqueda; capas, brújula y centrar ubicación
+  viven en el riel lateral para conservar la mayor superficie posible del mapa.
+- La brújula propia permanece sobre el lienzo, lee el sensor de rotación del
+  dispositivo (con respaldo de acelerómetro/campo magnético), compensa la
+  declinación magnética y suaviza el rumbo para reconocer N, E, S y O en tiempo
+  real. Al tocarla devuelve la cámara del mapa al norte sin mover la ubicación.
+  El perfil local de ruta ofrece `Bicicleta de ruta`, `Gravel` y `Mountain Bike`;
+  se conserva en el dispositivo y se muestra tambien en el calculo de trayectos.
+  No se muestra un indicador de porcentaje de asfalto ni se conserva espacio
+  reservado para ese concepto.
 - El selector reutiliza el mismo `MapView` y cambia el estilo con `setStyle`;
   un identificador descarta callbacks tardios. No volver a recrear el
   `AndroidView` por estilo: en el Samsung podia dejar visible el `SurfaceView`
@@ -469,11 +483,21 @@ Estado actual:
 - El lienzo de MapLibre desactiva temporalmente el swipe del pager mientras se
   toca/arrastra el mapa; los controles superpuestos lo reactivan para conservar
   la navegacion horizontal entre destinos.
+- En `ROUTES`, `MapView` es la primera capa del contenido central y ocupa todo
+  el espacio entre las áreas seguras. El overlay superior organiza en una misma
+  fila el selector de bicicleta, la búsqueda y el clima; `Trayecto`/`Junta`
+  quedan debajo del bloque izquierdo y brújula/capas/ubicación forman una única
+  columna bajo el clima.
 - La lectura actual consulta en paralelo GPS, red y proveedor pasivo mediante
   `LocationManagerCompat.getCurrentLocation` con `CancellationSignal`, elige el
   punto fresco de menor `accuracy` y solo acepta un ultimo punto conocido con
   hasta cinco minutos de antiguedad. No reintroducir `requestSingleUpdate` ni
   volver a aceptar el primer proveedor que responda.
+- El botón lateral `Centrar en mi ubicación` siempre solicita una lectura actual
+  con permiso fino o grueso; no se limita a recentrar una ubicación anterior.
+  Al recibir el punto, lo publica de inmediato en el mapa, lo persiste y deja la
+  resolución de dirección para después. El marcador usa un punto circular
+  visible más el icono verde para que la posición no desaparezca bajo el estilo.
 - La ubicacion obtenida es temporal hasta que el usuario la confirma.
 - Cada confirmacion incrementa su identificador de compromiso. Una respuesta
   tardia de `location.resolve` no puede reemplazar una ubicacion elegida despues.
